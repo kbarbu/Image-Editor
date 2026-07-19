@@ -3,8 +3,9 @@
    Everything runs client-side. Only model weights are fetched.
    ============================================================ */
 
-const BG_LIB    = 'https://esm.sh/@imgly/background-removal@1.7.0';
-const TRACE_LIB = 'https://esm.sh/imagetracerjs@1.2.6';
+const BG_LIB     = 'https://esm.sh/@imgly/background-removal@1.7.0';
+const TRACE_LIB  = 'https://esm.sh/imagetracerjs@1.2.6';
+const GIFENC_LIB = 'https://esm.sh/gifenc@1.0.3';
 
 /* ---------- element lookup ---------- */
 const $ = (id) => document.getElementById(id);
@@ -12,12 +13,15 @@ const el = {
   dropzone: $('dropzone'), fileInput: $('fileInput'), workspace: $('workspace'),
   newImageBtn: $('newImageBtn'), acceptedFormats: $('acceptedFormats'),
   stageSplit: $('stageSplit'), stageSbs: $('stageSbs'),
+  splitView: $('splitView'), paneViews: document.querySelectorAll('#stageSbs .pane__view'),
+  handle: $('handle'),
   imgBeforeSplit: $('imgBeforeSplit'), imgAfterSplit: $('imgAfterSplit'),
   imgBeforeSbs: $('imgBeforeSbs'), imgAfterSbs: $('imgAfterSbs'),
-  afterLayer: $('afterLayer'), splitRange: $('splitRange'),
+  liveSbs: $('liveSbs'), liveSplit: $('liveSplit'),
+  zoomOut: $('zoomOut'), zoomIn: $('zoomIn'), zoomReset: $('zoomReset'),
   checkerToggle: $('checkerToggle'),
   roName: $('roName'), roSource: $('roSource'), roResult: $('roResult'), roTime: $('roTime'),
-  panelBg: $('panel-bg'), panelConvert: $('panel-convert'),
+  panelBg: $('panel-bg'), panelConvert: $('panel-convert'), panelScribble: $('panel-scribble'),
   bgModel: $('bgModel'), bgDevice: $('bgDevice'), bgFormat: $('bgFormat'),
   bgQuality: $('bgQuality'), bgQualityField: $('bgQualityField'), bgQualityVal: $('bgQualityVal'),
   bgCustomColor: $('bgCustomColor'),
@@ -29,20 +33,25 @@ const el = {
   tcColors: $('tcColors'), tcColorsVal: $('tcColorsVal'),
   tcDetail: $('tcDetail'), tcDetailVal: $('tcDetailVal'),
   tcKeepTransparent: $('tcKeepTransparent'),
+  scWeight: $('scWeight'), scWeightVal: $('scWeightVal'),
+  scColors: $('scColors'), scColorsVal: $('scColorsVal'),
+  scTimelapse: $('scTimelapse'),
   progress: $('progress'), progressFill: $('progressFill'), progressLabel: $('progressLabel'),
   errorBox: $('errorBox'), runBtn: $('runBtn'), downloadBtn: $('downloadBtn'),
+  timelapseWebmBtn: $('timelapseWebmBtn'), timelapseGifBtn: $('timelapseGifBtn'),
 };
 
 /* ---------- state ---------- */
 const state = {
   tab: 'bg',
+  activeView: 'sbs',
   file: null,
   srcImg: null,
   srcW: 0, srcH: 0,
   srcURL: null,
   bgBackdrop: 'transparent',
   cvBackdrop: '#FFFFFF',
-  results: { bg: null, convert: null },   // { blob, url, w, h, ms, ext }
+  results: { bg: null, convert: null, scribble: null }, // { blob, url, w, h, ms, ext, video?, gif? }
   busy: false,
 };
 
@@ -52,6 +61,8 @@ const EXT = {
 };
 const LOSSY = new Set(['image/jpeg', 'image/webp', 'image/avif']);
 const NO_ALPHA = new Set(['image/jpeg', 'image/bmp']);
+
+const TAB_LABELS = { bg: 'Remove background', convert: 'Convert', scribble: 'Scribble it' };
 
 /* ============================================================
    Utilities
@@ -64,6 +75,15 @@ const fmtBytes = (b) => {
 };
 
 const baseName = (name) => name.replace(/\.[^.]+$/, '');
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** Scale w/h down (never up) so the longer side is at most `max`. */
+function capDims(w, h, max) {
+  if (Math.max(w, h) <= max) return { w, h };
+  const k = max / Math.max(w, h);
+  return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
+}
 
 function showError(msg) {
   el.errorBox.textContent = msg;
@@ -236,6 +256,8 @@ async function loadFile(file) {
   el.newImageBtn.hidden = false;
   markBlank(true);
   el.downloadBtn.disabled = true;
+  syncTimelapseButtons();
+  resetZoom();
   updateOutDims();
   hideProgress();
 }
@@ -247,9 +269,18 @@ function markBlank(blank) {
 
 function releaseResults() {
   for (const k of Object.keys(state.results)) {
-    if (state.results[k]?.url) URL.revokeObjectURL(state.results[k].url);
+    const r = state.results[k];
+    if (r?.url) URL.revokeObjectURL(r.url);
+    if (r?.video?.url) URL.revokeObjectURL(r.video.url);
+    if (r?.gif?.url) URL.revokeObjectURL(r.gif.url);
     state.results[k] = null;
   }
+}
+
+function syncTimelapseButtons() {
+  const r = state.tab === 'scribble' ? state.results.scribble : null;
+  el.timelapseWebmBtn.hidden = !r?.video;
+  el.timelapseGifBtn.hidden = !r?.gif;
 }
 
 /* ============================================================
@@ -273,6 +304,12 @@ async function getTracer() {
     tracer = mod.default || mod;
   }
   return tracer;
+}
+
+let gifenc = null;
+async function getGifenc() {
+  if (!gifenc) gifenc = await import(/* @vite-ignore */ GIFENC_LIB);
+  return gifenc;
 }
 
 /* ---------- Tool 1: background removal ---------- */
@@ -332,11 +369,11 @@ async function runBackgroundRemoval() {
 /* ---------- Tool 2: format conversion ---------- */
 
 const DETAIL = [
-  { label: 'Smoothest', ltres: 4,   qtres: 4,   pathomit: 24, blurradius: 2 },
-  { label: 'Smooth',    ltres: 2,   qtres: 2,   pathomit: 12, blurradius: 1 },
-  { label: 'Balanced',  ltres: 1,   qtres: 1,   pathomit: 8,  blurradius: 0 },
-  { label: 'Sharp',     ltres: 0.5, qtres: 0.5, pathomit: 4,  blurradius: 0 },
-  { label: 'Sharpest',  ltres: 0.1, qtres: 0.1, pathomit: 1,  blurradius: 0 },
+  { label: 'Smoothest', ltres: 3.5,  qtres: 3.5,  pathomit: 20, blurradius: 3, rightangle: false, preBlur: 1.6 },
+  { label: 'Smooth',    ltres: 1.8,  qtres: 1.8,  pathomit: 10, blurradius: 2, rightangle: false, preBlur: 0.8 },
+  { label: 'Balanced',  ltres: 1,    qtres: 1,    pathomit: 6,  blurradius: 1, rightangle: false, preBlur: 0.3 },
+  { label: 'Sharp',     ltres: 0.4,  qtres: 0.4,  pathomit: 3,  blurradius: 0, rightangle: true,  preBlur: 0   },
+  { label: 'Sharpest',  ltres: 0.05, qtres: 0.05, pathomit: 1,  blurradius: 0, rightangle: true,  preBlur: 0   },
 ];
 
 async function runConvert() {
@@ -371,34 +408,44 @@ async function traceToSVG(w, h) {
   const ImageTracer = await getTracer();
 
   // Tracing cost scales hard with pixel count. Cap the input.
-  const MAX = 1600;
-  let tw = w, th = h;
-  if (Math.max(tw, th) > MAX) {
-    const k = MAX / Math.max(tw, th);
-    tw = Math.round(tw * k); th = Math.round(th * k);
-  }
+  const { w: tw, h: th } = capDims(w, h, 1600);
 
   setProgress(35, 'Rasterizing for trace');
   const backdrop = el.tcKeepTransparent.checked ? null : '#FFFFFF';
-  const canvas = rasterize(state.srcImg, tw, th, backdrop);
+  let canvas = rasterize(state.srcImg, tw, th, backdrop);
+
+  const d = DETAIL[parseInt(el.tcDetail.value, 10)];
+
+  // A light pre-blur ahead of the tracer's own smoothing keeps curved edges
+  // from reading as jagged staircases — the tracer alone tends to hug noise.
+  if (d.preBlur > 0) {
+    const blurred = document.createElement('canvas');
+    blurred.width = tw; blurred.height = th;
+    const bctx = blurred.getContext('2d');
+    if ('filter' in bctx) {
+      bctx.filter = `blur(${d.preBlur}px)`;
+      bctx.drawImage(canvas, 0, 0);
+      canvas = blurred;
+    }
+  }
+
   const data = canvas.getContext('2d').getImageData(0, 0, tw, th);
 
   setProgress(55, 'Tracing paths — this can take a moment');
-  await new Promise((r) => setTimeout(r, 30)); // let the progress bar paint
+  await tick();
 
-  const d = DETAIL[parseInt(el.tcDetail.value, 10)];
   const svg = ImageTracer.imagedataToSVG(data, {
     numberofcolors: parseInt(el.tcColors.value, 10),
     colorsampling: 2,          // deterministic palette
-    colorquantcycles: 5,
+    colorquantcycles: 6,
     ltres: d.ltres,
     qtres: d.qtres,
     pathomit: d.pathomit,
     blurradius: d.blurradius,
-    blurdelta: 20,
-    rightangleenhance: true,   // keeps logo corners crisp
+    blurdelta: 24,
+    rightangleenhance: d.rightangle,   // only useful for crisp logo corners
     linefilter: true,
-    roundcoords: 1,
+    roundcoords: 2,
     strokewidth: 0,
     viewbox: true,
     desc: false,
@@ -407,6 +454,223 @@ async function traceToSVG(w, h) {
 
   const blob = new Blob([svg], { type: 'image/svg+xml' });
   return { blob, w: tw, h: th, ext: 'svg' };
+}
+
+/* ---------- Tool 3: scribble ---------- */
+
+const SCRIBBLE_ANALYSIS_MAX = 560;  // stroke planning grid — kept small on purpose, for speed
+const SCRIBBLE_OUTPUT_MAX   = 2000; // final PNG canvas cap
+const SCRIBBLE_GIF_MAX      = 420;  // GIF frames are much smaller than the PNG
+const SC_WEIGHT_WORDS = [
+  'Ballpoint', 'Ballpoint', 'Fine liner', 'Felt tip', 'Felt tip',
+  'Marker', 'Marker', 'Bold marker', 'Fat crayon', 'Crayon in a fist',
+];
+
+function scribbleControlsEnabled() {
+  return !!(document.createElement('canvas').captureStream && window.MediaRecorder);
+}
+
+async function runScribble() {
+  if (typeof ScribbleCore === 'undefined' || !ScribbleCore.plan) {
+    throw new Error('The scribble engine failed to load. Reload the page and try again.');
+  }
+
+  const weight = parseInt(el.scWeight.value, 10);
+  const colors = parseInt(el.scColors.value, 10);
+  const wantsTimelapse = el.scTimelapse.checked && !el.scTimelapse.disabled;
+
+  setProgress(6, 'Reading the image');
+  const a = capDims(state.srcW, state.srcH, SCRIBBLE_ANALYSIS_MAX);
+  const aCanvas = rasterize(state.srcImg, a.w, a.h, null);
+  const aData = aCanvas.getContext('2d').getImageData(0, 0, a.w, a.h);
+
+  const o = capDims(state.srcW, state.srcH, SCRIBBLE_OUTPUT_MAX);
+
+  setProgress(16, 'Planning strokes');
+  await tick();
+  const { strokes } = ScribbleCore.plan(aData.data, a.w, a.h, o.w, o.h, { colors, weight });
+  if (!strokes.length) {
+    throw new Error("Couldn't find enough shape in this image to scribble — try a different image or fewer colors.");
+  }
+
+  const workCanvas = document.createElement('canvas');
+  workCanvas.width = o.w; workCanvas.height = o.h;
+  const wctx = workCanvas.getContext('2d');
+
+  let recording = null;
+  let gifBlob = null;
+
+  if (wantsTimelapse) {
+    setProgress(28, 'Setting up the timelapse');
+    showLiveCanvases(o.w, o.h);
+
+    try {
+      recording = startRecording(workCanvas);
+    } catch (err) {
+      console.warn('Timelapse recording unavailable:', err);
+      recording = null;
+    }
+
+    const gifDims = capDims(o.w, o.h, SCRIBBLE_GIF_MAX);
+    const gifScale = gifDims.w / o.w;
+    const gifCanvas = document.createElement('canvas');
+    gifCanvas.width = gifDims.w; gifCanvas.height = gifDims.h;
+    const gctx = gifCanvas.getContext('2d');
+    const gifFrames = [];
+    const gifEvery = Math.max(1, Math.round(strokes.length / 90));
+
+    await drawProgressively(strokes, wctx, gctx, gifScale, gifEvery, gifFrames, (frac) => {
+      setProgress(30 + frac * 50, 'Scribbling');
+    });
+
+    if (recording) {
+      setProgress(84, 'Finishing the recording');
+      try { recording.blob = await recording.stop(); }
+      catch (err) { console.warn('Recording failed:', err); recording = null; }
+    }
+
+    if (gifFrames.length) {
+      setProgress(88, 'Building the GIF');
+      await tick();
+      try {
+        gifBlob = await buildGIF(gifFrames, gifDims.w, gifDims.h);
+      } catch (err) {
+        console.warn('GIF build failed:', err);
+        gifBlob = null;
+      }
+    }
+
+    hideLiveCanvases();
+  } else {
+    await drawAllChunked(strokes, wctx, (frac) => setProgress(20 + frac * 65, 'Scribbling'));
+  }
+
+  setProgress(97, 'Encoding PNG');
+  const blob = await canvasToBlob(workCanvas, 'image/png');
+
+  return {
+    blob, w: o.w, h: o.h, ext: 'png',
+    video: recording?.blob ? { blob: recording.blob, url: URL.createObjectURL(recording.blob) } : null,
+    gif: gifBlob ? { blob: gifBlob, url: URL.createObjectURL(gifBlob) } : null,
+  };
+}
+
+function showLiveCanvases(w, h) {
+  for (const c of [el.liveSbs, el.liveSplit]) {
+    c.width = w; c.height = h;
+    c.getContext('2d').clearRect(0, 0, w, h);
+    c.hidden = false;
+  }
+  el.imgAfterSbs.style.visibility = 'hidden';
+  el.imgAfterSplit.style.visibility = 'hidden';
+  markBlank(false);
+}
+function hideLiveCanvases() {
+  el.liveSbs.hidden = true;
+  el.liveSplit.hidden = true;
+  el.imgAfterSbs.style.visibility = '';
+  el.imgAfterSplit.style.visibility = '';
+}
+function blitLive(sourceCanvas) {
+  for (const c of [el.liveSbs, el.liveSplit]) {
+    if (c.hidden) continue;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(sourceCanvas, 0, 0);
+  }
+}
+
+function scaleStroke(s, k) {
+  return {
+    pts: s.pts.map(([x, y]) => [x * k, y * k]),
+    color: s.color,
+    width: Math.max(0.75, s.width * k),
+  };
+}
+
+/** Draw strokes a chunk at a time (time-boxed per frame) so the tab stays responsive,
+    mirroring progress onto the live canvases and sampling GIF frames along the way. */
+function drawProgressively(strokes, wctx, gctx, gifScale, gifEvery, gifFrames, onProgress) {
+  return new Promise((resolve) => {
+    const total = strokes.length;
+    let i = 0;
+    function step() {
+      const start = performance.now();
+      while (i < total && performance.now() - start < 16) {
+        const s = strokes[i];
+        ScribbleCore.drawStroke(wctx, s);
+        ScribbleCore.drawStroke(gctx, scaleStroke(s, gifScale));
+        i++;
+        if (i % gifEvery === 0 || i === total) {
+          gifFrames.push(gctx.getImageData(0, 0, gctx.canvas.width, gctx.canvas.height));
+        }
+      }
+      blitLive(wctx.canvas);
+      onProgress(i / total);
+      if (i < total) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+function drawAllChunked(strokes, wctx, onProgress) {
+  return new Promise((resolve) => {
+    const total = strokes.length;
+    let i = 0;
+    function step() {
+      const start = performance.now();
+      while (i < total && performance.now() - start < 16) {
+        ScribbleCore.drawStroke(wctx, strokes[i]);
+        i++;
+      }
+      onProgress(i / total);
+      if (i < total) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+function startRecording(canvas) {
+  if (!canvas.captureStream || !window.MediaRecorder) throw new Error('MediaRecorder not supported');
+  const stream = canvas.captureStream(30);
+  const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const mimeType = candidates.find((m) => MediaRecorder.isTypeSupported?.(m)) || '';
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const chunks = [];
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  const done = new Promise((resolve) => {
+    recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType || 'video/webm' }));
+  });
+  recorder.start();
+  return {
+    stop: async () => {
+      // Hold on the finished drawing for a beat so the clip doesn't end mid-stroke.
+      await new Promise((r) => setTimeout(r, 500));
+      recorder.stop();
+      return done;
+    },
+  };
+}
+
+async function buildGIF(frames, w, h) {
+  const { GIFEncoder, quantize, applyPalette } = await getGifenc();
+  const gif = GIFEncoder();
+  const frameDelay = 45;
+  frames.forEach((imgData, idx) => {
+    const data = imgData.data;
+    const palette = quantize(data, 96, { format: 'rgba4444' });
+    const index = applyPalette(data, palette, 'rgba4444');
+    const isLast = idx === frames.length - 1;
+    gif.writeFrame(index, w, h, {
+      palette,
+      delay: isLast ? frameDelay * 8 : frameDelay,
+      transparent: true,
+    });
+  });
+  gif.finish();
+  return new Blob([gif.bytes()], { type: 'image/gif' });
 }
 
 /* ============================================================
@@ -419,15 +683,21 @@ async function run() {
   clearError();
   el.runBtn.disabled = true;
   el.downloadBtn.disabled = true;
+  el.timelapseWebmBtn.hidden = true;
+  el.timelapseGifBtn.hidden = true;
   setProgress(3, 'Starting');
 
   const t0 = performance.now();
   try {
-    const out = state.tab === 'bg' ? await runBackgroundRemoval() : await runConvert();
+    const out = state.tab === 'bg' ? await runBackgroundRemoval()
+      : state.tab === 'convert' ? await runConvert()
+      : await runScribble();
     const ms = Math.round(performance.now() - t0);
 
     const prev = state.results[state.tab];
     if (prev?.url) URL.revokeObjectURL(prev.url);
+    if (prev?.video?.url) URL.revokeObjectURL(prev.video.url);
+    if (prev?.gif?.url) URL.revokeObjectURL(prev.gif.url);
 
     const url = URL.createObjectURL(out.blob);
     state.results[state.tab] = { ...out, url, ms };
@@ -440,11 +710,13 @@ async function run() {
     el.roTime.textContent = ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`;
 
     el.downloadBtn.disabled = false;
+    syncTimelapseButtons();
     setProgress(100, 'Done');
     setTimeout(hideProgress, 700);
   } catch (err) {
     console.error(err);
     hideProgress();
+    hideLiveCanvases();
     showError(err?.message || 'Something went wrong. Check the console for details.');
   } finally {
     state.busy = false;
@@ -455,7 +727,7 @@ async function run() {
 function download() {
   const r = state.results[state.tab];
   if (!r) return;
-  const suffix = state.tab === 'bg' ? '-cutout' : '';
+  const suffix = state.tab === 'bg' ? '-cutout' : state.tab === 'scribble' ? '-scribble' : '';
   const a = document.createElement('a');
   a.href = r.url;
   a.download = `${baseName(state.file.name)}${suffix}.${r.ext}`;
@@ -463,6 +735,175 @@ function download() {
   a.click();
   a.remove();
 }
+
+function downloadTimelapse(kind) {
+  const r = state.results.scribble;
+  const item = kind === 'gif' ? r?.gif : r?.video;
+  if (!item) return;
+  const a = document.createElement('a');
+  a.href = item.url;
+  a.download = `${baseName(state.file.name)}-scribble-timelapse.${kind === 'gif' ? 'gif' : 'webm'}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/* ============================================================
+   Zoom & pan
+   ============================================================ */
+
+const zoom = { scale: 1, x: 0, y: 0 };
+const ZOOM_MIN = 1, ZOOM_MAX = 6;
+
+function applyZoomTransform() {
+  const t = zoom.scale <= 1.001 ? '' : `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
+  el.splitView.style.transform = t;
+  el.paneViews.forEach((pv) => { pv.style.transform = t; });
+  el.zoomReset.textContent = Math.round(zoom.scale * 100) + '%';
+  const zoomed = zoom.scale > 1.001;
+  el.stageSbs.classList.toggle('can-pan', zoomed);
+  el.stageSplit.classList.toggle('can-pan', zoomed);
+}
+
+function clampPan(paneW, paneH) {
+  zoom.x = clamp(zoom.x, -(paneW * (zoom.scale - 1)), 0);
+  zoom.y = clamp(zoom.y, -(paneH * (zoom.scale - 1)), 0);
+}
+
+function resetZoom() {
+  zoom.scale = 1; zoom.x = 0; zoom.y = 0;
+  applyZoomTransform();
+}
+
+function zoomAt(factor, localX, localY, paneW, paneH) {
+  const newScale = clamp(zoom.scale * factor, ZOOM_MIN, ZOOM_MAX);
+  if (newScale === zoom.scale) return;
+  const originX = (localX - zoom.x) / zoom.scale;
+  const originY = (localY - zoom.y) / zoom.scale;
+  zoom.scale = newScale;
+  if (zoom.scale <= 1.001) {
+    zoom.scale = 1; zoom.x = 0; zoom.y = 0;
+  } else {
+    zoom.x = localX - originX * zoom.scale;
+    zoom.y = localY - originY * zoom.scale;
+    clampPan(paneW, paneH);
+  }
+  applyZoomTransform();
+}
+
+/** SBS has two equal-width panes side by side; map a client point into
+    "local pane space" so the same transform can drive both panes at once. */
+function localPointFor(name, clientX, clientY) {
+  if (name === 'split') {
+    const r = el.stageSplit.getBoundingClientRect();
+    return { x: clientX - r.left, y: clientY - r.top, w: r.width, h: r.height };
+  }
+  const r = el.stageSbs.getBoundingClientRect();
+  const paneW = r.width / 2;
+  let lx = (clientX - r.left) % paneW;
+  if (lx < 0) lx += paneW;
+  return { x: lx, y: clientY - r.top, w: paneW, h: r.height };
+}
+
+function isBlank() {
+  return el.stageSplit.classList.contains('is-blank');
+}
+
+function buttonZoom(factor) {
+  if (isBlank()) return;
+  const name = state.activeView;
+  const stage = name === 'split' ? el.stageSplit : el.stageSbs;
+  const r = stage.getBoundingClientRect();
+  const w = name === 'split' ? r.width : r.width / 2;
+  zoomAt(factor, w / 2, r.height / 2, w, r.height);
+}
+
+el.zoomIn.addEventListener('click', () => buttonZoom(1.35));
+el.zoomOut.addEventListener('click', () => buttonZoom(1 / 1.35));
+el.zoomReset.addEventListener('click', resetZoom);
+
+function wireWheelZoom(stageEl, name) {
+  stageEl.addEventListener('wheel', (e) => {
+    if (isBlank()) return;
+    e.preventDefault();
+    const p = localPointFor(name, e.clientX, e.clientY);
+    const factor = Math.exp(-e.deltaY * 0.0016);
+    zoomAt(factor, p.x, p.y, p.w, p.h);
+  }, { passive: false });
+}
+wireWheelZoom(el.stageSbs, 'sbs');
+wireWheelZoom(el.stageSplit, 'split');
+
+function wireDragPan(stageEl, name) {
+  let dragging = false, lastX = 0, lastY = 0;
+  stageEl.addEventListener('pointerdown', (e) => {
+    if (zoom.scale <= 1 || e.target.closest('.handle')) return;
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    stageEl.classList.add('is-panning');
+    stageEl.setPointerCapture(e.pointerId);
+  });
+  stageEl.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    zoom.x += dx; zoom.y += dy;
+    const r = stageEl.getBoundingClientRect();
+    clampPan(name === 'split' ? r.width : r.width / 2, r.height);
+    applyZoomTransform();
+  });
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    stageEl.classList.remove('is-panning');
+    try { stageEl.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+  };
+  stageEl.addEventListener('pointerup', end);
+  stageEl.addEventListener('pointercancel', end);
+}
+wireDragPan(el.stageSbs, 'sbs');
+wireDragPan(el.stageSplit, 'split');
+
+/* ============================================================
+   Split handle
+   ============================================================ */
+
+let splitPct = 50;
+function setSplit(pct) {
+  splitPct = clamp(pct, 4, 96);
+  el.stageSplit.style.setProperty('--split', splitPct + '%');
+  el.handle.setAttribute('aria-valuenow', String(Math.round(splitPct)));
+}
+setSplit(50);
+
+(function wireHandle() {
+  let dragging = false;
+  const pctFromClientX = (clientX) => {
+    const r = el.stageSplit.getBoundingClientRect();
+    return ((clientX - r.left) / r.width) * 100;
+  };
+  el.handle.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    e.stopPropagation();
+    el.handle.setPointerCapture(e.pointerId);
+  });
+  el.handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    setSplit(pctFromClientX(e.clientX));
+  });
+  const stop = (e) => {
+    dragging = false;
+    try { el.handle.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+  };
+  el.handle.addEventListener('pointerup', stop);
+  el.handle.addEventListener('pointercancel', stop);
+  el.handle.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') { setSplit(splitPct - 3); e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { setSplit(splitPct + 3); e.preventDefault(); }
+    else if (e.key === 'Home') { setSplit(4); e.preventDefault(); }
+    else if (e.key === 'End') { setSplit(96); e.preventDefault(); }
+  });
+})();
 
 /* ============================================================
    UI wiring
@@ -510,7 +951,8 @@ document.querySelectorAll('.tab').forEach((btn) => {
     state.tab = btn.dataset.tab;
     el.panelBg.hidden = state.tab !== 'bg';
     el.panelConvert.hidden = state.tab !== 'convert';
-    el.runBtn.textContent = state.tab === 'bg' ? 'Remove background' : 'Convert';
+    el.panelScribble.hidden = state.tab !== 'scribble';
+    el.runBtn.textContent = TAB_LABELS[state.tab] || 'Run';
     clearError();
     hideProgress();
 
@@ -529,23 +971,21 @@ document.querySelectorAll('.tab').forEach((btn) => {
       el.roTime.textContent = '—';
       el.downloadBtn.disabled = true;
     }
+    syncTimelapseButtons();
   });
 });
 
-/* --- comparison view --- */
-document.querySelectorAll('.seg__btn').forEach((btn) => {
+/* --- comparison view (only the two data-view segmented buttons — not the zoom group) --- */
+document.querySelectorAll('.seg__btn[data-view]').forEach((btn) => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.seg__btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+    document.querySelectorAll('.seg__btn[data-view]').forEach((b) => b.classList.toggle('is-active', b === btn));
     const split = btn.dataset.view === 'split';
     el.stageSplit.hidden = !split;
     el.stageSbs.hidden = split;
+    state.activeView = split ? 'split' : 'sbs';
+    resetZoom();
   });
 });
-
-el.splitRange.addEventListener('input', () => {
-  el.stageSplit.style.setProperty('--split', el.splitRange.value + '%');
-});
-el.stageSplit.style.setProperty('--split', '50%');
 
 el.checkerToggle.addEventListener('change', () => {
   const on = el.checkerToggle.checked ? 'on' : 'off';
@@ -590,7 +1030,7 @@ const HINTS = {
   'image/webp':    'Smaller than PNG at similar quality, and it keeps alpha.',
   'image/avif':    'Smallest files, keeps alpha. Chrome and Edge can write it; Safari and Firefox cannot.',
   'image/bmp':     'Uncompressed 24-bit. Large files, no alpha. Only for tools that demand it.',
-  'image/svg+xml': 'Traces the image into real vector paths. Built for flat art, not photographs.',
+  'image/svg+xml': 'Traces the image into real vector paths, with a smoothing pass first. Built for flat art, not photographs.',
 };
 
 function updateConvertUI() {
@@ -619,9 +1059,19 @@ el.tcDetail.addEventListener('input', () => {
   el.tcDetailVal.textContent = DETAIL[parseInt(el.tcDetail.value, 10)].label;
 });
 
+/* --- scribble panel --- */
+el.scWeight.addEventListener('input', () => {
+  el.scWeightVal.textContent = SC_WEIGHT_WORDS[parseInt(el.scWeight.value, 10) - 1];
+});
+el.scColors.addEventListener('input', () => {
+  el.scColorsVal.textContent = el.scColors.value;
+});
+
 /* --- actions --- */
 el.runBtn.addEventListener('click', run);
 el.downloadBtn.addEventListener('click', download);
+el.timelapseWebmBtn.addEventListener('click', () => downloadTimelapse('webm'));
+el.timelapseGifBtn.addEventListener('click', () => downloadTimelapse('gif'));
 
 /* --- boot --- */
 (async function boot() {
@@ -635,4 +1085,11 @@ el.downloadBtn.addEventListener('click', download);
   }
   // Decoding AVIF is far more widespread than encoding it, so list it either way.
   el.acceptedFormats.textContent += ' · AVIF';
+
+  if (!scribbleControlsEnabled()) {
+    el.scTimelapse.checked = false;
+    el.scTimelapse.disabled = true;
+    const hint = el.scTimelapse.closest('.field')?.querySelector('.field__hint');
+    if (hint) hint.textContent = "This browser can't record canvas video, so the timelapse recording is unavailable here — the scribble itself still works fine.";
+  }
 })();

@@ -1,5 +1,5 @@
 /* ============================================================
-   Scribble core — turns an image into kid-crayon scribble strokes.
+   Scribble core - turns an image into kid-crayon scribble strokes.
    Pure logic + canvas drawing. No DOM assumptions beyond 2d ctx.
    Exported as an object so the same file runs in node and browser.
    ============================================================ */
