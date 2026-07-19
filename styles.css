@@ -1,0 +1,631 @@
+/* ============================================================
+   Image Bench
+   Palette : cool graphite lab bench
+   Accent  : rubylith — the ruby masking film cut by hand in
+             prepress to knock out backgrounds. Same job as
+             this tool, eighty years earlier.
+   ============================================================ */
+
+:root {
+  --bg:        #E5E9ED;
+  --bg-deep:   #D6DCE3;
+  --panel:     #FBFCFD;
+  --ink:       #0D1116;
+  --ink-soft:  #3D4650;
+  --muted:     #6E7883;
+  --line:      #CBD2DA;
+  --line-soft: #E1E6EB;
+
+  --ruby:      #CE1F2E;
+  --ruby-deep: #9E1420;
+  --ruby-wash: rgba(206, 31, 46, 0.10);
+
+  --check-a:   #FFFFFF;
+  --check-b:   #DFE4E9;
+  --check-size: 16px;
+
+  --display: "Archivo", system-ui, sans-serif;
+  --body:    "IBM Plex Sans", system-ui, sans-serif;
+  --mono:    "IBM Plex Mono", ui-monospace, monospace;
+
+  --r:   4px;
+  --pad: 20px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+* { box-sizing: border-box; }
+
+/* Class-based display rules outrank the UA's [hidden] rule, so anything
+   with display:grid/flex would refuse to hide. Settle it once, here. */
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 14px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ruby);
+  outline-offset: 2px;
+}
+
+/* ---------------- Checkerboard motif ---------------- */
+/* The alpha channel, made visible. This is the signature. */
+.checker {
+  background-image:
+    linear-gradient(45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--check-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--check-b) 75%);
+  background-size: var(--check-size) var(--check-size);
+  background-position: 0 0, 0 calc(var(--check-size) / 2),
+                       calc(var(--check-size) / 2) calc(var(--check-size) / -2),
+                       calc(var(--check-size) / -2) 0;
+  background-color: var(--check-a);
+}
+
+/* ---------------- Topbar ---------------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 var(--pad);
+  height: 58px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.wordmark { display: flex; align-items: center; gap: 10px; }
+
+.wordmark__chip {
+  width: 18px; height: 18px;
+  border-radius: 2px;
+  border: 1px solid var(--line);
+  background-image:
+    linear-gradient(45deg, var(--ruby) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--ruby) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--ruby) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--ruby) 75%);
+  background-size: 9px 9px;
+  background-position: 0 0, 0 4.5px, 4.5px -4.5px, -4.5px 0;
+  background-color: #fff;
+}
+
+.wordmark__text {
+  font-family: var(--display);
+  font-variation-settings: "wdth" 118;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.tabs { display: flex; gap: 2px; }
+
+.tab {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--r);
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.tab:hover { color: var(--ink); background: var(--bg); }
+.tab.is-active { color: var(--ink); background: var(--bg-deep); font-weight: 600; }
+
+.ghost-btn {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 6px 11px;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+.ghost-btn:hover { border-color: var(--muted); color: var(--ink); }
+
+/* ---------------- Bench ---------------- */
+.bench { flex: 1; min-height: 0; display: flex; }
+
+/* ---------------- Dropzone ---------------- */
+.dropzone {
+  flex: 1;
+  margin: var(--pad);
+  border: 1.5px dashed var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: border-color 0.18s var(--ease), background 0.18s var(--ease);
+}
+.dropzone:hover { border-color: var(--muted); }
+.dropzone.is-over {
+  border-color: var(--ruby);
+  border-style: solid;
+  background: var(--ruby-wash);
+}
+
+.dropzone__inner { text-align: center; padding: 32px; }
+
+/* The board rotates a quarter turn on hover — a sheet of ruby
+   film being laid down over the checkerboard beneath it. */
+.dropzone__board {
+  width: 76px; height: 76px;
+  margin: 0 auto 22px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background-image:
+    linear-gradient(45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--check-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--check-b) 75%);
+  background-size: 19px 19px;
+  background-position: 0 0, 0 9.5px, 9.5px -9.5px, -9.5px 0;
+  background-color: #fff;
+  position: relative;
+  transition: transform 0.4s var(--ease);
+}
+.dropzone__board::after {
+  content: "";
+  position: absolute;
+  inset: 14px 14px 14px 14px;
+  background: var(--ruby);
+  opacity: 0;
+  border-radius: 2px;
+  transition: opacity 0.4s var(--ease);
+}
+.dropzone:hover .dropzone__board,
+.dropzone.is-over .dropzone__board { transform: rotate(90deg); }
+.dropzone:hover .dropzone__board::after,
+.dropzone.is-over .dropzone__board::after { opacity: 0.85; }
+
+.dropzone__title {
+  font-family: var(--display);
+  font-variation-settings: "wdth" 112;
+  font-weight: 700;
+  font-size: 30px;
+  letter-spacing: -0.015em;
+  margin: 0 0 6px;
+}
+.dropzone__sub { margin: 0 0 18px; color: var(--muted); }
+.link { color: var(--ruby); text-decoration: underline; text-underline-offset: 2px; }
+.dropzone__formats { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+
+/* ---------------- Workspace ---------------- */
+.workspace {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 296px;
+}
+
+/* ---------------- Viewer ---------------- */
+.viewer {
+  min-width: 0;
+  padding: var(--pad);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.viewer__head { display: flex; align-items: center; gap: 14px; }
+.viewer__spacer { flex: 1; }
+
+.seg {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--panel);
+}
+.seg__btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.seg__btn + .seg__btn { border-left: 1px solid var(--line); }
+.seg__btn.is-active { background: var(--ink); color: #fff; }
+
+.checkline {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.checkline input { accent-color: var(--ruby); margin: 0; }
+
+/* ---------------- Stage ---------------- */
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 240px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--panel);
+  touch-action: none;
+}
+.stage[data-checker="on"] {
+  background-image:
+    linear-gradient(45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--check-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--check-b) 75%);
+  background-size: var(--check-size) var(--check-size);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-color: var(--check-a);
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+.layer img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.layer--after {
+  clip-path: inset(0 0 0 var(--split, 50%));
+}
+.stage.is-blank .layer--after { display: none; }
+
+.stage__tag {
+  position: absolute;
+  top: 9px;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: rgba(251, 252, 253, 0.86);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 2px 7px;
+  pointer-events: none;
+}
+.stage__tag--l { left: 9px; }
+.stage__tag--r { right: 9px; }
+.stage.is-blank .stage__tag--r { display: none; }
+
+.stage__empty {
+  position: absolute;
+  inset: auto 0 50% 0;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: none;
+  pointer-events: none;
+}
+.stage.is-blank .stage__empty { display: block; }
+
+/* Split handle — rubylith */
+.handle {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: var(--split, 50%);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ruby);
+  pointer-events: none;
+}
+.handle__grip {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--ruby);
+  box-shadow: 0 1px 6px rgba(13, 17, 22, 0.3);
+}
+.handle__grip::before,
+.handle__grip::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 0; height: 0;
+  border: 4px solid transparent;
+  transform: translateY(-50%);
+}
+.handle__grip::before { right: 15px; border-right-color: #fff; }
+.handle__grip::after  { left: 15px;  border-left-color: #fff; }
+
+.stage.is-blank .handle,
+.stage.is-blank .split-range { display: none; }
+
+/* Invisible range on top of the stage: gives keyboard + touch for free */
+.split-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+  -webkit-appearance: none;
+  appearance: none;
+  background: none;
+}
+.split-range::-webkit-slider-thumb { -webkit-appearance: none; width: 40px; height: 100vh; cursor: ew-resize; }
+.split-range::-moz-range-thumb { width: 40px; height: 100vh; border: 0; cursor: ew-resize; }
+.split-range:focus-visible { opacity: 1; outline: 2px solid var(--ruby); outline-offset: -2px; }
+
+/* Side by side */
+.stage--sbs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background-color: var(--line);
+}
+.pane { position: relative; overflow: hidden; }
+.pane__box {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+.stage--sbs[data-checker="on"] .pane__box {
+  background-image:
+    linear-gradient(45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--check-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--check-b) 75%);
+  background-size: var(--check-size) var(--check-size);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-color: var(--check-a);
+}
+.stage--sbs:not([data-checker="on"]) .pane__box { background: var(--panel); }
+.pane__box img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.pane__tag {
+  position: absolute;
+  top: 9px; left: 9px;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: rgba(251, 252, 253, 0.86);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 2px 7px;
+}
+
+/* ---------------- Readout ---------------- */
+/* Instruments have readouts. */
+.readout {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.readout__cell { background: var(--panel); padding: 8px 11px; min-width: 0; }
+.readout dt {
+  font-size: 9px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.readout dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------- Panel ---------------- */
+.panel {
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel__body { padding: var(--pad); overflow-y: auto; flex: 1; }
+
+.panel__title {
+  font-family: var(--display);
+  font-variation-settings: "wdth" 108;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+  margin: 0 0 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.field { margin-bottom: 20px; }
+.field__label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 7px;
+}
+.field__label b { color: var(--ink); font-weight: 600; text-transform: none; letter-spacing: 0; }
+.field__hint { margin: 7px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+
+select {
+  width: 100%;
+  font-family: var(--body);
+  font-size: 13px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 8px 9px;
+  cursor: pointer;
+}
+select:hover { border-color: var(--muted); }
+
+input[type="range"] { width: 100%; accent-color: var(--ruby); cursor: pointer; }
+
+/* Swatches */
+.swatches { display: flex; gap: 7px; }
+.swatch {
+  width: 34px; height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--sw, transparent);
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.swatch:hover { border-color: var(--muted); }
+.swatch.is-active {
+  border-color: var(--ruby);
+  box-shadow: inset 0 0 0 2px var(--ruby);
+}
+.swatch__check {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--check-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--check-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--check-b) 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+  background-color: #fff;
+}
+.swatch input[type="color"] {
+  position: absolute;
+  inset: -6px;
+  width: calc(100% + 12px);
+  height: calc(100% + 12px);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  background: none;
+}
+
+/* ---------------- Panel foot ---------------- */
+.panel__foot {
+  padding: var(--pad);
+  border-top: 1px solid var(--line-soft);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  flex-shrink: 0;
+}
+
+.btn {
+  font-family: var(--body);
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--r);
+  padding: 11px 14px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), opacity 0.15s var(--ease);
+}
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn--primary { background: var(--ruby); color: #fff; }
+.btn--primary:hover:not(:disabled) { background: var(--ruby-deep); }
+
+.btn--download { background: #fff; color: var(--ink); border-color: var(--line); }
+.btn--download:hover:not(:disabled) { border-color: var(--ink); }
+
+.progress { display: flex; flex-direction: column; gap: 6px; }
+.progress__bar {
+  height: 3px;
+  background: var(--bg-deep);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress__bar span {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--ruby);
+  transition: width 0.25s var(--ease);
+}
+.progress__label { font-size: 10.5px; color: var(--muted); letter-spacing: 0.03em; }
+
+.error {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ruby-deep);
+  background: var(--ruby-wash);
+  border-left: 2px solid var(--ruby);
+  padding: 8px 10px;
+  border-radius: 0 3px 3px 0;
+}
+
+/* ---------------- Footnote ---------------- */
+.footnote {
+  padding: 11px var(--pad);
+  font-size: 10.5px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+
+/* ---------------- Responsive ---------------- */
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: 1fr; }
+  .panel { border-left: 0; border-top: 1px solid var(--line); }
+  .bench { display: block; overflow-y: auto; }
+  .stage { min-height: 320px; }
+  .readout { grid-template-columns: 1fr 1fr; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 10px var(--pad); gap: 12px; }
+  .footnote { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

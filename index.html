@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Bench</title>
+<meta name="description" content="A local image workbench: remove backgrounds and convert formats, entirely in the browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wordmark">
+    <span class="wordmark__chip" aria-hidden="true"></span>
+    <span class="wordmark__text">Image Bench</span>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="Tools">
+    <button class="tab is-active" role="tab" aria-selected="true" data-tab="bg" id="tab-bg">Remove background</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="convert" id="tab-convert">Convert format</button>
+  </nav>
+
+  <button class="ghost-btn" id="newImageBtn" hidden>Load another image</button>
+</header>
+
+<main class="bench">
+
+  <!-- ============ EMPTY STATE ============ -->
+  <section class="dropzone" id="dropzone" tabindex="0" role="button"
+           aria-label="Drop an image here, or press Enter to browse">
+    <div class="dropzone__inner">
+      <div class="dropzone__board" aria-hidden="true"></div>
+      <h1 class="dropzone__title">Drop an image</h1>
+      <p class="dropzone__sub">or <span class="link">browse your files</span> &middot; or paste from clipboard</p>
+      <p class="dropzone__formats mono" id="acceptedFormats">PNG &middot; JPEG &middot; WEBP &middot; GIF &middot; BMP &middot; SVG</p>
+    </div>
+    <input type="file" id="fileInput" accept="image/*,.svg" hidden>
+  </section>
+
+  <!-- ============ WORKSPACE ============ -->
+  <section class="workspace" id="workspace" hidden>
+
+    <div class="viewer">
+      <div class="viewer__head">
+        <div class="seg" role="group" aria-label="Comparison mode">
+          <button class="seg__btn is-active" data-view="split">Split</button>
+          <button class="seg__btn" data-view="sbs">Side by side</button>
+        </div>
+        <div class="viewer__spacer"></div>
+        <label class="checkline">
+          <input type="checkbox" id="checkerToggle" checked>
+          <span>Checkerboard</span>
+        </label>
+      </div>
+
+      <!-- SPLIT -->
+      <div class="stage" id="stageSplit" data-checker="on">
+        <div class="layer layer--before"><img id="imgBeforeSplit" alt="Original image"></div>
+        <div class="layer layer--after" id="afterLayer"><img id="imgAfterSplit" alt="Processed result"></div>
+        <div class="stage__tag stage__tag--l mono">Before</div>
+        <div class="stage__tag stage__tag--r mono">After</div>
+        <div class="handle" id="handle" aria-hidden="true"><span class="handle__grip"></span></div>
+        <input type="range" class="split-range" id="splitRange" min="0" max="100" value="50" step="0.1"
+               aria-label="Comparison split position">
+        <div class="stage__empty mono" id="stageEmpty">Result appears here</div>
+      </div>
+
+      <!-- SIDE BY SIDE -->
+      <div class="stage stage--sbs" id="stageSbs" data-checker="on" hidden>
+        <div class="pane">
+          <div class="pane__box"><img id="imgBeforeSbs" alt="Original image"></div>
+          <div class="pane__tag mono">Before</div>
+        </div>
+        <div class="pane">
+          <div class="pane__box"><img id="imgAfterSbs" alt="Processed result"></div>
+          <div class="pane__tag mono">After</div>
+        </div>
+      </div>
+
+      <!-- READOUT -->
+      <dl class="readout mono" id="readout">
+        <div class="readout__cell"><dt>File</dt><dd id="roName">&mdash;</dd></div>
+        <div class="readout__cell"><dt>Source</dt><dd id="roSource">&mdash;</dd></div>
+        <div class="readout__cell"><dt>Result</dt><dd id="roResult">&mdash;</dd></div>
+        <div class="readout__cell"><dt>Elapsed</dt><dd id="roTime">&mdash;</dd></div>
+      </dl>
+    </div>
+
+    <!-- ============ SETTINGS ============ -->
+    <aside class="panel">
+
+      <!-- ---- BACKGROUND TAB ---- -->
+      <div class="panel__body" id="panel-bg">
+        <h2 class="panel__title">Remove background</h2>
+
+        <div class="field">
+          <span class="field__label mono">Backdrop</span>
+          <div class="swatches" id="backdrops">
+            <button class="swatch is-active" data-backdrop="transparent" title="Transparent"><span class="swatch__check"></span></button>
+            <button class="swatch" data-backdrop="#FFFFFF" title="White" style="--sw:#FFFFFF"></button>
+            <button class="swatch" data-backdrop="#000000" title="Black" style="--sw:#000000"></button>
+            <button class="swatch" data-backdrop="custom" title="Custom color">
+              <input type="color" id="bgCustomColor" value="#CE1F2E" aria-label="Custom backdrop color">
+            </button>
+          </div>
+          <p class="field__hint">Transparent needs PNG or WEBP. JPEG has no alpha channel &mdash; pick a solid backdrop for it.</p>
+        </div>
+
+        <div class="field">
+          <label class="field__label mono" for="bgModel">Model</label>
+          <select id="bgModel">
+            <option value="isnet">Full &mdash; best edges, largest download</option>
+            <option value="isnet_fp16" selected>Half precision &mdash; balanced</option>
+            <option value="isnet_quint8">Quantized &mdash; fastest, softest edges</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field__label mono" for="bgDevice">Compute</label>
+          <select id="bgDevice">
+            <option value="gpu" selected>GPU when available</option>
+            <option value="cpu">CPU only</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field__label mono" for="bgFormat">Save as</label>
+          <select id="bgFormat">
+            <option value="image/png" selected>PNG</option>
+            <option value="image/webp">WEBP</option>
+            <option value="image/jpeg">JPEG</option>
+          </select>
+        </div>
+
+        <div class="field" id="bgQualityField" hidden>
+          <label class="field__label mono" for="bgQuality">Quality <b class="mono" id="bgQualityVal">0.92</b></label>
+          <input type="range" id="bgQuality" min="0.3" max="1" step="0.01" value="0.92">
+        </div>
+      </div>
+
+      <!-- ---- CONVERT TAB ---- -->
+      <div class="panel__body" id="panel-convert" hidden>
+        <h2 class="panel__title">Convert format</h2>
+
+        <div class="field">
+          <label class="field__label mono" for="cvFormat">Save as</label>
+          <select id="cvFormat">
+            <option value="image/png" selected>PNG</option>
+            <option value="image/jpeg">JPEG</option>
+            <option value="image/webp">WEBP</option>
+            <option value="image/avif">AVIF</option>
+            <option value="image/bmp">BMP</option>
+            <option value="image/svg+xml">SVG &mdash; traced vector</option>
+          </select>
+          <p class="field__hint" id="cvFormatHint"></p>
+        </div>
+
+        <div class="field" id="cvQualityField" hidden>
+          <label class="field__label mono" for="cvQuality">Quality <b class="mono" id="cvQualityVal">0.92</b></label>
+          <input type="range" id="cvQuality" min="0.3" max="1" step="0.01" value="0.92">
+        </div>
+
+        <div class="field" id="cvScaleField">
+          <label class="field__label mono" for="cvScale">Scale <b class="mono" id="cvScaleVal">100%</b></label>
+          <input type="range" id="cvScale" min="10" max="400" step="5" value="100">
+          <p class="field__hint mono" id="cvOutDims">&mdash;</p>
+        </div>
+
+        <div class="field" id="cvFlattenField" hidden>
+          <span class="field__label mono">Flatten transparency onto</span>
+          <div class="swatches" id="cvBackdrops">
+            <button class="swatch is-active" data-backdrop="#FFFFFF" title="White" style="--sw:#FFFFFF"></button>
+            <button class="swatch" data-backdrop="#000000" title="Black" style="--sw:#000000"></button>
+            <button class="swatch" data-backdrop="custom" title="Custom color">
+              <input type="color" id="cvCustomColor" value="#CE1F2E" aria-label="Custom flatten color">
+            </button>
+          </div>
+        </div>
+
+        <!-- SVG tracing knobs -->
+        <div id="traceOpts" hidden>
+          <div class="field">
+            <label class="field__label mono" for="tcColors">Colors <b class="mono" id="tcColorsVal">8</b></label>
+            <input type="range" id="tcColors" min="2" max="32" step="1" value="8">
+            <p class="field__hint">Flat logos trace cleanly at 2&ndash;8. Photographs will not trace well at any setting.</p>
+          </div>
+          <div class="field">
+            <label class="field__label mono" for="tcDetail">Detail <b class="mono" id="tcDetailVal">Balanced</b></label>
+            <input type="range" id="tcDetail" min="0" max="4" step="1" value="2">
+            <p class="field__hint">Higher detail follows edges tightly and grows the file. Lower smooths noise away.</p>
+          </div>
+          <div class="field">
+            <label class="checkline"><input type="checkbox" id="tcKeepTransparent" checked><span>Keep transparent areas</span></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- ACTIONS ---- -->
+      <div class="panel__foot">
+        <div class="progress" id="progress" hidden>
+          <div class="progress__bar"><span id="progressFill"></span></div>
+          <p class="progress__label mono" id="progressLabel">Working</p>
+        </div>
+        <p class="error mono" id="errorBox" hidden></p>
+        <button class="btn btn--primary" id="runBtn">Remove background</button>
+        <button class="btn btn--download" id="downloadBtn" disabled>Download</button>
+      </div>
+
+    </aside>
+  </section>
+</main>
+
+<footer class="footnote mono">
+  Runs entirely in your browser. Images never leave this machine &mdash; only the model weights are fetched, once, then cached.
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
