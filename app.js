@@ -3,9 +3,8 @@
    Everything runs client-side. Only model weights are fetched.
    ============================================================ */
 
-const BG_LIB     = 'https://esm.sh/@imgly/background-removal@1.7.0';
-const TRACE_LIB  = 'https://esm.sh/imagetracerjs@1.2.6';
-const GIFENC_LIB = 'https://esm.sh/gifenc@1.0.3';
+const BG_LIB    = 'https://esm.sh/@imgly/background-removal@1.7.0';
+const TRACE_LIB = 'https://esm.sh/imagetracerjs@1.2.6';
 
 /* ---------- element lookup ---------- */
 const $ = (id) => document.getElementById(id);
@@ -13,13 +12,12 @@ const el = {
   dropzone: $('dropzone'), fileInput: $('fileInput'), workspace: $('workspace'),
   newImageBtn: $('newImageBtn'), acceptedFormats: $('acceptedFormats'),
   stageSplit: $('stageSplit'), stageSbs: $('stageSbs'),
-  splitView: $('splitView'), paneViews: document.querySelectorAll('#stageSbs .pane__view'),
-  handle: $('handle'),
+  splitView: $('splitView'), afterWrap: $('afterWrap'),
   imgBeforeSplit: $('imgBeforeSplit'), imgAfterSplit: $('imgAfterSplit'),
   imgBeforeSbs: $('imgBeforeSbs'), imgAfterSbs: $('imgAfterSbs'),
-  liveSbs: $('liveSbs'), liveSplit: $('liveSplit'),
-  zoomOut: $('zoomOut'), zoomIn: $('zoomIn'), zoomReset: $('zoomReset'),
-  checkerToggle: $('checkerToggle'),
+  liveSplit: $('liveSplit'), liveSbs: $('liveSbs'),
+  handle: $('handle'), checkerToggle: $('checkerToggle'),
+  zoomIn: $('zoomIn'), zoomOut: $('zoomOut'), zoomReset: $('zoomReset'),
   roName: $('roName'), roSource: $('roSource'), roResult: $('roResult'), roTime: $('roTime'),
   panelBg: $('panel-bg'), panelConvert: $('panel-convert'), panelScribble: $('panel-scribble'),
   bgModel: $('bgModel'), bgDevice: $('bgDevice'), bgFormat: $('bgFormat'),
@@ -37,22 +35,23 @@ const el = {
   scColors: $('scColors'), scColorsVal: $('scColorsVal'),
   scTimelapse: $('scTimelapse'),
   progress: $('progress'), progressFill: $('progressFill'), progressLabel: $('progressLabel'),
-  errorBox: $('errorBox'), runBtn: $('runBtn'), downloadBtn: $('downloadBtn'),
-  timelapseWebmBtn: $('timelapseWebmBtn'), timelapseGifBtn: $('timelapseGifBtn'),
+  errorBox: $('errorBox'), runBtn: $('runBtn'),
+  downloadBtn: $('downloadBtn'), timelapseBtn: $('timelapseBtn'),
 };
 
 /* ---------- state ---------- */
 const state = {
   tab: 'bg',
-  activeView: 'sbs',
   file: null,
   srcImg: null,
   srcW: 0, srcH: 0,
   srcURL: null,
   bgBackdrop: 'transparent',
   cvBackdrop: '#FFFFFF',
-  results: { bg: null, convert: null, scribble: null }, // { blob, url, w, h, ms, ext, video?, gif? }
+  results: { bg: null, convert: null, scribble: null },  // { blob, url, w, h, ms, ext, timelapse? }
   busy: false,
+  splitF: 0.5,                    // split position, fraction of the content plane
+  zoom: { z: 1, fx: 0, fy: 0 },   // scale + pan (fractions of the plane)
 };
 
 const EXT = {
@@ -61,12 +60,14 @@ const EXT = {
 };
 const LOSSY = new Set(['image/jpeg', 'image/webp', 'image/avif']);
 const NO_ALPHA = new Set(['image/jpeg', 'image/bmp']);
-
-const TAB_LABELS = { bg: 'Remove background', convert: 'Convert', scribble: 'Scribble it' };
+const RUN_LABEL = { bg: 'Remove background', convert: 'Convert', scribble: 'Scribble it' };
+const DL_SUFFIX = { bg: '-cutout', convert: '', scribble: '-scribble' };
 
 /* ============================================================
    Utilities
    ============================================================ */
+
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 const fmtBytes = (b) => {
   if (b < 1024) return b + ' B';
@@ -75,15 +76,6 @@ const fmtBytes = (b) => {
 };
 
 const baseName = (name) => name.replace(/\.[^.]+$/, '');
-const tick = () => new Promise((r) => setTimeout(r, 0));
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-
-/** Scale w/h down (never up) so the longer side is at most `max`. */
-function capDims(w, h, max) {
-  if (Math.max(w, h) <= max) return { w, h };
-  const k = max / Math.max(w, h);
-  return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
-}
 
 function showError(msg) {
   el.errorBox.textContent = msg;
@@ -222,6 +214,7 @@ async function loadFile(file) {
   }
 
   clearError();
+  cancelScribbleAnim();
   releaseResults();
   if (state.srcURL) URL.revokeObjectURL(state.srcURL);
 
@@ -256,32 +249,172 @@ async function loadFile(file) {
   el.newImageBtn.hidden = false;
   markBlank(true);
   el.downloadBtn.disabled = true;
-  syncTimelapseButtons();
+  el.timelapseBtn.hidden = true;
   resetZoom();
+  state.splitF = 0.5;
+  applySplit();
   updateOutDims();
   hideProgress();
 }
 
 function markBlank(blank) {
   el.stageSplit.classList.toggle('is-blank', blank);
-  el.imgAfterSbs.style.visibility = blank ? 'hidden' : 'visible';
+  el.stageSbs.classList.toggle('is-blank', blank);
+  updateHandle();
 }
 
 function releaseResults() {
   for (const k of Object.keys(state.results)) {
     const r = state.results[k];
     if (r?.url) URL.revokeObjectURL(r.url);
-    if (r?.video?.url) URL.revokeObjectURL(r.video.url);
-    if (r?.gif?.url) URL.revokeObjectURL(r.gif.url);
+    if (r?.timelapse?.url) URL.revokeObjectURL(r.timelapse.url);
     state.results[k] = null;
   }
 }
 
-function syncTimelapseButtons() {
-  const r = state.tab === 'scribble' ? state.results.scribble : null;
-  el.timelapseWebmBtn.hidden = !r?.video;
-  el.timelapseGifBtn.hidden = !r?.gif;
+/* ============================================================
+   Zoom, pan, split
+   ============================================================ */
+
+function applyZoom() {
+  const { z, fx, fy } = state.zoom;
+  const t = `translate(${fx * 100}%, ${fy * 100}%) scale(${z})`;
+  el.splitView.style.transform = t;
+  document.querySelectorAll('.pane__view').forEach((v) => { v.style.transform = t; });
+  el.zoomReset.textContent = Math.round(z * 100) + '%';
+  const pannable = z > 1.001;
+  el.stageSplit.classList.toggle('can-pan', pannable);
+  el.stageSbs.classList.toggle('can-pan', pannable);
+  updateHandle();
 }
+
+function clampPan() {
+  const { z } = state.zoom;
+  state.zoom.fx = clamp(state.zoom.fx, 1 - z, 0);
+  state.zoom.fy = clamp(state.zoom.fy, 1 - z, 0);
+}
+
+function setZoom(z, cx = 0.5, cy = 0.5) {
+  z = clamp(z, 1, 8);
+  const o = state.zoom;
+  const ux = (cx - o.fx) / o.z, uy = (cy - o.fy) / o.z;
+  o.fx = cx - ux * z;
+  o.fy = cy - uy * z;
+  o.z = z;
+  clampPan();
+  applyZoom();
+}
+
+function resetZoom() {
+  state.zoom = { z: 1, fx: 0, fy: 0 };
+  applyZoom();
+}
+
+function applySplit() {
+  el.afterWrap.style.clipPath = `inset(0 0 0 ${state.splitF * 100}%)`;
+  updateHandle();
+}
+
+function updateHandle() {
+  // Handle lives in stage coordinates; the split line lives on the zoomed plane.
+  const s = state.zoom.fx + state.splitF * state.zoom.z;
+  el.handle.style.left = s * 100 + '%';
+  el.handle.style.visibility = s < -0.005 || s > 1.005 ? 'hidden' : '';
+  el.handle.setAttribute('aria-valuenow', String(Math.round(state.splitF * 100)));
+}
+
+el.zoomIn.addEventListener('click', () => setZoom(state.zoom.z * 1.4));
+el.zoomOut.addEventListener('click', () => setZoom(state.zoom.z / 1.4));
+el.zoomReset.addEventListener('click', resetZoom);
+
+function wireWheelZoom(stage, unitFor) {
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = unitFor(e).getBoundingClientRect();
+    const cx = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    const cy = clamp((e.clientY - rect.top) / rect.height, 0, 1);
+    setZoom(state.zoom.z * (e.deltaY < 0 ? 1.16 : 1 / 1.16), cx, cy);
+  }, { passive: false });
+}
+wireWheelZoom(el.stageSplit, () => el.stageSplit);
+wireWheelZoom(el.stageSbs, (e) => e.target.closest('.pane') || el.stageSbs.querySelector('.pane'));
+
+/* --- pointer interactions: drag the split line, or pan when zoomed --- */
+let drag = null;
+
+function setSplitFromClient(clientX, rect) {
+  const xf = (clientX - rect.left) / rect.width;
+  state.splitF = clamp((xf - state.zoom.fx) / state.zoom.z, 0, 1);
+  applySplit();
+}
+
+el.stageSplit.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  const rect = el.stageSplit.getBoundingClientRect();
+  const xf = (e.clientX - rect.left) / rect.width;
+  const handleS = state.zoom.fx + state.splitF * state.zoom.z;
+  const blank = el.stageSplit.classList.contains('is-blank');
+  const nearHandle = Math.abs(xf - handleS) * rect.width < 24;
+
+  let mode = null;
+  if (!blank && (nearHandle || state.zoom.z <= 1.001)) mode = 'split';
+  else if (state.zoom.z > 1.001) mode = 'pan';
+  if (!mode) return;
+
+  e.preventDefault();
+  drag = {
+    mode, sx: e.clientX, sy: e.clientY,
+    fx: state.zoom.fx, fy: state.zoom.fy,
+    unitW: rect.width, unitH: rect.height, rect,
+    stage: el.stageSplit,
+  };
+  el.stageSplit.setPointerCapture(e.pointerId);
+  if (mode === 'split') setSplitFromClient(e.clientX, rect);
+  else el.stageSplit.classList.add('is-panning');
+});
+
+el.stageSbs.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || state.zoom.z <= 1.001) return;
+  e.preventDefault();
+  const pane = el.stageSbs.querySelector('.pane').getBoundingClientRect();
+  drag = {
+    mode: 'pan', sx: e.clientX, sy: e.clientY,
+    fx: state.zoom.fx, fy: state.zoom.fy,
+    unitW: pane.width, unitH: pane.height,
+    stage: el.stageSbs,
+  };
+  el.stageSbs.setPointerCapture(e.pointerId);
+  el.stageSbs.classList.add('is-panning');
+});
+
+function onDragMove(e) {
+  if (!drag) return;
+  if (drag.mode === 'split') {
+    setSplitFromClient(e.clientX, drag.rect);
+  } else {
+    state.zoom.fx = drag.fx + (e.clientX - drag.sx) / drag.unitW;
+    state.zoom.fy = drag.fy + (e.clientY - drag.sy) / drag.unitH;
+    clampPan();
+    applyZoom();
+  }
+}
+function onDragEnd() {
+  if (!drag) return;
+  drag.stage.classList.remove('is-panning');
+  drag = null;
+}
+for (const stage of [el.stageSplit, el.stageSbs]) {
+  stage.addEventListener('pointermove', onDragMove);
+  stage.addEventListener('pointerup', onDragEnd);
+  stage.addEventListener('pointercancel', onDragEnd);
+}
+
+el.handle.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  state.splitF = clamp(state.splitF + (e.key === 'ArrowRight' ? 0.02 : -0.02), 0, 1);
+  applySplit();
+});
 
 /* ============================================================
    Tools
@@ -304,12 +437,6 @@ async function getTracer() {
     tracer = mod.default || mod;
   }
   return tracer;
-}
-
-let gifenc = null;
-async function getGifenc() {
-  if (!gifenc) gifenc = await import(/* @vite-ignore */ GIFENC_LIB);
-  return gifenc;
 }
 
 /* ---------- Tool 1: background removal ---------- */
@@ -369,11 +496,14 @@ async function runBackgroundRemoval() {
 /* ---------- Tool 2: format conversion ---------- */
 
 const DETAIL = [
-  { label: 'Smoothest', ltres: 3.5,  qtres: 3.5,  pathomit: 20, blurradius: 3, rightangle: false, preBlur: 1.6 },
-  { label: 'Smooth',    ltres: 1.8,  qtres: 1.8,  pathomit: 10, blurradius: 2, rightangle: false, preBlur: 0.8 },
-  { label: 'Balanced',  ltres: 1,    qtres: 1,    pathomit: 6,  blurradius: 1, rightangle: false, preBlur: 0.3 },
-  { label: 'Sharp',     ltres: 0.4,  qtres: 0.4,  pathomit: 3,  blurradius: 0, rightangle: true,  preBlur: 0   },
-  { label: 'Sharpest',  ltres: 0.05, qtres: 0.05, pathomit: 1,  blurradius: 0, rightangle: true,  preBlur: 0   },
+  // Smooth presets lean hard on blur + high tolerance so jagged pixel
+  // edges melt into long curves; right-angle enhancement is off for them
+  // because it fights the smoothing by pinning corners back in place.
+  { label: 'Smoothest', ltres: 10,  qtres: 10,  pathomit: 60, blurradius: 5, blurdelta: 64, rae: false },
+  { label: 'Smooth',    ltres: 4,   qtres: 4,   pathomit: 28, blurradius: 3, blurdelta: 48, rae: false },
+  { label: 'Balanced',  ltres: 1.5, qtres: 1.5, pathomit: 10, blurradius: 1, blurdelta: 24, rae: true },
+  { label: 'Sharp',     ltres: 0.5, qtres: 0.5, pathomit: 4,  blurradius: 0, blurdelta: 20, rae: true },
+  { label: 'Sharpest',  ltres: 0.1, qtres: 0.1, pathomit: 1,  blurradius: 0, blurdelta: 20, rae: true },
 ];
 
 async function runConvert() {
@@ -408,42 +538,32 @@ async function traceToSVG(w, h) {
   const ImageTracer = await getTracer();
 
   // Tracing cost scales hard with pixel count. Cap the input.
-  const { w: tw, h: th } = capDims(w, h, 1600);
+  const MAX = 1600;
+  let tw = w, th = h;
+  if (Math.max(tw, th) > MAX) {
+    const k = MAX / Math.max(tw, th);
+    tw = Math.round(tw * k); th = Math.round(th * k);
+  }
 
   setProgress(35, 'Rasterizing for trace');
   const backdrop = el.tcKeepTransparent.checked ? null : '#FFFFFF';
-  let canvas = rasterize(state.srcImg, tw, th, backdrop);
-
-  const d = DETAIL[parseInt(el.tcDetail.value, 10)];
-
-  // A light pre-blur ahead of the tracer's own smoothing keeps curved edges
-  // from reading as jagged staircases — the tracer alone tends to hug noise.
-  if (d.preBlur > 0) {
-    const blurred = document.createElement('canvas');
-    blurred.width = tw; blurred.height = th;
-    const bctx = blurred.getContext('2d');
-    if ('filter' in bctx) {
-      bctx.filter = `blur(${d.preBlur}px)`;
-      bctx.drawImage(canvas, 0, 0);
-      canvas = blurred;
-    }
-  }
-
+  const canvas = rasterize(state.srcImg, tw, th, backdrop);
   const data = canvas.getContext('2d').getImageData(0, 0, tw, th);
 
   setProgress(55, 'Tracing paths — this can take a moment');
-  await tick();
+  await new Promise((r) => setTimeout(r, 30)); // let the progress bar paint
 
+  const d = DETAIL[parseInt(el.tcDetail.value, 10)];
   const svg = ImageTracer.imagedataToSVG(data, {
     numberofcolors: parseInt(el.tcColors.value, 10),
     colorsampling: 2,          // deterministic palette
-    colorquantcycles: 6,
+    colorquantcycles: 5,
     ltres: d.ltres,
     qtres: d.qtres,
     pathomit: d.pathomit,
     blurradius: d.blurradius,
-    blurdelta: 24,
-    rightangleenhance: d.rightangle,   // only useful for crisp logo corners
+    blurdelta: d.blurdelta,
+    rightangleenhance: d.rae,
     linefilter: true,
     roundcoords: 2,
     strokewidth: 0,
@@ -458,265 +578,208 @@ async function traceToSVG(w, h) {
 
 /* ---------- Tool 3: scribble ---------- */
 
-const SCRIBBLE_ANALYSIS_MAX = 560;  // stroke planning grid — kept small on purpose, for speed
-const SCRIBBLE_OUTPUT_MAX   = 2000; // final PNG canvas cap
-const SCRIBBLE_GIF_MAX      = 420;  // GIF frames are much smaller than the PNG
-const SC_WEIGHT_WORDS = [
-  'Ballpoint', 'Ballpoint', 'Fine liner', 'Felt tip', 'Felt tip',
-  'Marker', 'Marker', 'Bold marker', 'Fat crayon', 'Crayon in a fist',
-];
+let animToken = 0;
 
-function scribbleControlsEnabled() {
-  return !!(document.createElement('canvas').captureStream && window.MediaRecorder);
-}
+/** Finish any in-flight timelapse instantly (tab switch, new image, etc). */
+function cancelScribbleAnim() { animToken++; }
 
 async function runScribble() {
-  if (typeof ScribbleCore === 'undefined' || !ScribbleCore.plan) {
-    throw new Error('The scribble engine failed to load. Reload the page and try again.');
-  }
+  let compute = 0;
+  let t = performance.now();
 
-  const weight = parseInt(el.scWeight.value, 10);
-  const colors = parseInt(el.scColors.value, 10);
-  const wantsTimelapse = el.scTimelapse.checked && !el.scTimelapse.disabled;
+  // Analyze at a small size — the walker only needs region shapes.
+  const A = 220;
+  const ka = Math.min(1, A / Math.max(state.srcW, state.srcH));
+  const aw = Math.max(2, Math.round(state.srcW * ka));
+  const ah = Math.max(2, Math.round(state.srcH * ka));
+  const ac = rasterize(state.srcImg, aw, ah, null);
+  const data = ac.getContext('2d').getImageData(0, 0, aw, ah).data;
 
-  setProgress(6, 'Reading the image');
-  const a = capDims(state.srcW, state.srcH, SCRIBBLE_ANALYSIS_MAX);
-  const aCanvas = rasterize(state.srcImg, a.w, a.h, null);
-  const aData = aCanvas.getContext('2d').getImageData(0, 0, a.w, a.h);
+  // Output size: source size, but bounded so strokes stay chunky and fast.
+  const srcMax = Math.max(state.srcW, state.srcH);
+  const O = clamp(srcMax, 640, 1600);
+  const ko = O / srcMax;
+  const ow = Math.max(2, Math.round(state.srcW * ko));
+  const oh = Math.max(2, Math.round(state.srcH * ko));
 
-  const o = capDims(state.srcW, state.srcH, SCRIBBLE_OUTPUT_MAX);
+  setProgress(20, 'Choosing crayons');
+  await new Promise((r) => setTimeout(r, 20)); // let the bar paint
 
-  setProgress(16, 'Planning strokes');
-  await tick();
-  const { strokes } = ScribbleCore.plan(aData.data, a.w, a.h, o.w, o.h, { colors, weight });
-  if (!strokes.length) {
-    throw new Error("Couldn't find enough shape in this image to scribble — try a different image or fewer colors.");
-  }
+  const { strokes } = ScribbleCore.plan(data, aw, ah, ow, oh, {
+    colors: parseInt(el.scColors.value, 10),
+    weight: parseInt(el.scWeight.value, 10),
+  });
+  if (!strokes.length) throw new Error('Nothing to scribble — the image looks fully transparent.');
 
-  const workCanvas = document.createElement('canvas');
-  workCanvas.width = o.w; workCanvas.height = o.h;
-  const wctx = workCanvas.getContext('2d');
+  const master = document.createElement('canvas');
+  master.width = ow; master.height = oh;
+  const mctx = master.getContext('2d');
 
-  let recording = null;
-  let gifBlob = null;
+  compute += performance.now() - t;
 
-  if (wantsTimelapse) {
-    setProgress(28, 'Setting up the timelapse');
-    showLiveCanvases(o.w, o.h);
-
-    try {
-      recording = startRecording(workCanvas);
-    } catch (err) {
-      console.warn('Timelapse recording unavailable:', err);
-      recording = null;
-    }
-
-    const gifDims = capDims(o.w, o.h, SCRIBBLE_GIF_MAX);
-    const gifScale = gifDims.w / o.w;
-    const gifCanvas = document.createElement('canvas');
-    gifCanvas.width = gifDims.w; gifCanvas.height = gifDims.h;
-    const gctx = gifCanvas.getContext('2d');
-    const gifFrames = [];
-    const gifEvery = Math.max(1, Math.round(strokes.length / 90));
-
-    await drawProgressively(strokes, wctx, gctx, gifScale, gifEvery, gifFrames, (frac) => {
-      setProgress(30 + frac * 50, 'Scribbling');
-    });
-
-    if (recording) {
-      setProgress(84, 'Finishing the recording');
-      try { recording.blob = await recording.stop(); }
-      catch (err) { console.warn('Recording failed:', err); recording = null; }
-    }
-
-    if (gifFrames.length) {
-      setProgress(88, 'Building the GIF');
-      await tick();
-      try {
-        gifBlob = await buildGIF(gifFrames, gifDims.w, gifDims.h);
-      } catch (err) {
-        console.warn('GIF build failed:', err);
-        gifBlob = null;
+  if (!el.scTimelapse.checked) {
+    // Straight to the result, chunked so the progress bar moves.
+    t = performance.now();
+    for (let i = 0; i < strokes.length; i++) {
+      ScribbleCore.drawStroke(mctx, strokes[i]);
+      if (i % 400 === 399) {
+        setProgress(30 + (i / strokes.length) * 60, `Scribbling · ${i + 1} of ${strokes.length} strokes`);
+        await new Promise((r) => requestAnimationFrame(r));
       }
     }
-
-    hideLiveCanvases();
-  } else {
-    await drawAllChunked(strokes, wctx, (frac) => setProgress(20 + frac * 65, 'Scribbling'));
+    setProgress(95, 'Encoding');
+    const blob = await canvasToBlob(master, 'image/png');
+    compute += performance.now() - t;
+    return { blob, w: ow, h: oh, ext: 'png', msOverride: Math.round(compute) };
   }
 
-  setProgress(97, 'Encoding PNG');
-  const blob = await canvasToBlob(workCanvas, 'image/png');
+  /* ----- timelapse: animate in the viewer and record a video ----- */
+  const targets = [mctx];
 
-  return {
-    blob, w: o.w, h: o.h, ext: 'png',
-    video: recording?.blob ? { blob: recording.blob, url: URL.createObjectURL(recording.blob) } : null,
-    gif: gifBlob ? { blob: gifBlob, url: URL.createObjectURL(gifBlob) } : null,
-  };
-}
-
-function showLiveCanvases(w, h) {
-  for (const c of [el.liveSbs, el.liveSplit]) {
-    c.width = w; c.height = h;
-    c.getContext('2d').clearRect(0, 0, w, h);
-    c.hidden = false;
+  for (const cv of [el.liveSplit, el.liveSbs]) {
+    cv.width = ow; cv.height = oh;
+    cv.getContext('2d').clearRect(0, 0, ow, oh);
+    cv.hidden = false;
   }
-  el.imgAfterSbs.style.visibility = 'hidden';
+  targets.push(el.liveSplit.getContext('2d'), el.liveSbs.getContext('2d'));
   el.imgAfterSplit.style.visibility = 'hidden';
+  el.imgAfterSbs.style.visibility = 'hidden';
   markBlank(false);
-}
-function hideLiveCanvases() {
-  el.liveSbs.hidden = true;
-  el.liveSplit.hidden = true;
-  el.imgAfterSbs.style.visibility = '';
-  el.imgAfterSplit.style.visibility = '';
-}
-function blitLive(sourceCanvas) {
-  for (const c of [el.liveSbs, el.liveSplit]) {
-    if (c.hidden) continue;
-    const ctx = c.getContext('2d');
-    ctx.clearRect(0, 0, c.width, c.height);
-    ctx.drawImage(sourceCanvas, 0, 0);
-  }
-}
 
-function scaleStroke(s, k) {
-  return {
-    pts: s.pts.map(([x, y]) => [x * k, y * k]),
-    color: s.color,
-    width: Math.max(0.75, s.width * k),
-  };
-}
-
-/** Draw strokes a chunk at a time (time-boxed per frame) so the tab stays responsive,
-    mirroring progress onto the live canvases and sampling GIF frames along the way. */
-function drawProgressively(strokes, wctx, gctx, gifScale, gifEvery, gifFrames, onProgress) {
-  return new Promise((resolve) => {
-    const total = strokes.length;
-    let i = 0;
-    function step() {
-      const start = performance.now();
-      while (i < total && performance.now() - start < 16) {
-        const s = strokes[i];
-        ScribbleCore.drawStroke(wctx, s);
-        ScribbleCore.drawStroke(gctx, scaleStroke(s, gifScale));
-        i++;
-        if (i % gifEvery === 0 || i === total) {
-          gifFrames.push(gctx.getImageData(0, 0, gctx.canvas.width, gctx.canvas.height));
-        }
-      }
-      blitLive(wctx.canvas);
-      onProgress(i / total);
-      if (i < total) requestAnimationFrame(step);
-      else resolve();
-    }
-    requestAnimationFrame(step);
-  });
-}
-
-function drawAllChunked(strokes, wctx, onProgress) {
-  return new Promise((resolve) => {
-    const total = strokes.length;
-    let i = 0;
-    function step() {
-      const start = performance.now();
-      while (i < total && performance.now() - start < 16) {
-        ScribbleCore.drawStroke(wctx, strokes[i]);
-        i++;
-      }
-      onProgress(i / total);
-      if (i < total) requestAnimationFrame(step);
-      else resolve();
-    }
-    requestAnimationFrame(step);
-  });
-}
-
-function startRecording(canvas) {
-  if (!canvas.captureStream || !window.MediaRecorder) throw new Error('MediaRecorder not supported');
-  const stream = canvas.captureStream(30);
-  const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
-  const mimeType = candidates.find((m) => MediaRecorder.isTypeSupported?.(m)) || '';
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-  const chunks = [];
-  recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-  const done = new Promise((resolve) => {
-    recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType || 'video/webm' }));
-  });
-  recorder.start();
-  return {
-    stop: async () => {
-      // Hold on the finished drawing for a beat so the clip doesn't end mid-stroke.
-      await new Promise((r) => setTimeout(r, 500));
-      recorder.stop();
-      return done;
-    },
-  };
-}
-
-async function buildGIF(frames, w, h) {
-  const { GIFEncoder, quantize, applyPalette } = await getGifenc();
-  const gif = GIFEncoder();
-  const frameDelay = 45;
-  frames.forEach((imgData, idx) => {
-    const data = imgData.data;
-    const palette = quantize(data, 96, { format: 'rgba4444' });
-    const index = applyPalette(data, palette, 'rgba4444');
-    const isLast = idx === frames.length - 1;
-    gif.writeFrame(index, w, h, {
-      palette,
-      delay: isLast ? frameDelay * 8 : frameDelay,
-      transparent: true,
+  // Video has no alpha, so the recording gets a plain white sheet of paper.
+  let recorder = null, recChunks = [], recExt = 'webm';
+  const mimes = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+  const recMime = typeof MediaRecorder !== 'undefined'
+    ? mimes.find((m) => MediaRecorder.isTypeSupported(m)) : null;
+  if (recMime) {
+    const rc = document.createElement('canvas');
+    rc.width = ow; rc.height = oh;
+    const rctx = rc.getContext('2d');
+    rctx.fillStyle = '#FFFFFF';
+    rctx.fillRect(0, 0, ow, oh);
+    targets.push(rctx);
+    recExt = recMime.includes('mp4') ? 'mp4' : 'webm';
+    recorder = new MediaRecorder(rc.captureStream(60), {
+      mimeType: recMime, videoBitsPerSecond: 8_000_000,
     });
-  });
-  gif.finish();
-  return new Blob([gif.bytes()], { type: 'image/gif' });
+    recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+    recorder.start(200);
+  }
+
+  const myToken = ++animToken;
+  const secs = clamp(strokes.length / 110, 3.5, 8);
+
+  try {
+    await new Promise((resolve) => {
+      const t0 = performance.now();
+      let drawn = 0;
+      const frame = () => {
+        const cancelled = animToken !== myToken;
+        const upto = cancelled
+          ? strokes.length
+          : Math.min(strokes.length, Math.floor(((performance.now() - t0) / 1000 / secs) * strokes.length));
+        for (; drawn < upto; drawn++) {
+          for (const ctx of targets) ScribbleCore.drawStroke(ctx, strokes[drawn]);
+        }
+        setProgress(25 + (drawn / strokes.length) * 70, `Scribbling · ${drawn} of ${strokes.length} strokes`);
+        if (drawn >= strokes.length) {
+          // Hold the finished frame briefly so the recording doesn't cut hard.
+          setTimeout(resolve, cancelled ? 0 : 400);
+        } else {
+          requestAnimationFrame(frame);
+        }
+      };
+      frame();
+    });
+  } finally {
+    el.liveSplit.hidden = true;
+    el.liveSbs.hidden = true;
+    el.imgAfterSplit.style.visibility = '';
+    el.imgAfterSbs.style.visibility = '';
+  }
+
+  let timelapse = null;
+  if (recorder) {
+    await new Promise((res) => { recorder.onstop = res; recorder.stop(); });
+    if (recChunks.length) {
+      timelapse = { blob: new Blob(recChunks, { type: recorder.mimeType }), ext: recExt };
+    }
+  }
+
+  t = performance.now();
+  setProgress(97, 'Encoding');
+  const blob = await canvasToBlob(master, 'image/png');
+  compute += performance.now() - t;
+
+  return { blob, w: ow, h: oh, ext: 'png', timelapse, msOverride: Math.round(compute) };
 }
 
 /* ============================================================
    Run / download
    ============================================================ */
 
+function showResult(tab) {
+  const r = state.results[tab];
+  if (r) {
+    el.imgAfterSplit.src = r.url;
+    el.imgAfterSbs.src = r.url;
+    markBlank(false);
+    el.roResult.textContent = `${r.w}×${r.h} · ${fmtBytes(r.blob.size)} · ${r.ext.toUpperCase()}`;
+    el.roTime.textContent = r.ms < 1000 ? `${r.ms} ms` : `${(r.ms / 1000).toFixed(2)} s`;
+    el.downloadBtn.disabled = false;
+    el.timelapseBtn.hidden = !r.timelapse;
+  } else {
+    markBlank(true);
+    el.roResult.textContent = '—';
+    el.roTime.textContent = '—';
+    el.downloadBtn.disabled = true;
+    el.timelapseBtn.hidden = true;
+  }
+}
+
 async function run() {
   if (state.busy || !state.file) return;
+  const tab = state.tab;
   state.busy = true;
   clearError();
   el.runBtn.disabled = true;
   el.downloadBtn.disabled = true;
-  el.timelapseWebmBtn.hidden = true;
-  el.timelapseGifBtn.hidden = true;
+  el.timelapseBtn.hidden = true;
   setProgress(3, 'Starting');
 
   const t0 = performance.now();
   try {
-    const out = state.tab === 'bg' ? await runBackgroundRemoval()
-      : state.tab === 'convert' ? await runConvert()
-      : await runScribble();
-    const ms = Math.round(performance.now() - t0);
+    let out;
+    if (tab === 'bg') out = await runBackgroundRemoval();
+    else if (tab === 'convert') out = await runConvert();
+    else out = await runScribble();
 
-    const prev = state.results[state.tab];
-    if (prev?.url) URL.revokeObjectURL(prev.url);
-    if (prev?.video?.url) URL.revokeObjectURL(prev.video.url);
-    if (prev?.gif?.url) URL.revokeObjectURL(prev.gif.url);
+    const ms = out.msOverride ?? Math.round(performance.now() - t0);
 
+    // Install the new result FIRST, then retire the old one. Revoking the
+    // previous blob URL before the swap could abort the fresh render, which
+    // left the stale conversion on screen.
+    const prev = state.results[tab];
     const url = URL.createObjectURL(out.blob);
-    state.results[state.tab] = { ...out, url, ms };
+    const timelapse = out.timelapse
+      ? { ...out.timelapse, url: URL.createObjectURL(out.timelapse.blob) }
+      : null;
+    state.results[tab] = { blob: out.blob, w: out.w, h: out.h, ext: out.ext, url, ms, timelapse };
 
-    el.imgAfterSplit.src = url;
-    el.imgAfterSbs.src = url;
-    markBlank(false);
+    if (prev) {
+      setTimeout(() => {
+        if (prev.url) URL.revokeObjectURL(prev.url);
+        if (prev.timelapse?.url) URL.revokeObjectURL(prev.timelapse.url);
+      }, 1500);
+    }
 
-    el.roResult.textContent = `${out.w}×${out.h} · ${fmtBytes(out.blob.size)} · ${out.ext.toUpperCase()}`;
-    el.roTime.textContent = ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`;
+    if (state.tab === tab) showResult(tab);
 
-    el.downloadBtn.disabled = false;
-    syncTimelapseButtons();
     setProgress(100, 'Done');
     setTimeout(hideProgress, 700);
   } catch (err) {
     console.error(err);
     hideProgress();
-    hideLiveCanvases();
     showError(err?.message || 'Something went wrong. Check the console for details.');
   } finally {
     state.busy = false;
@@ -727,183 +790,24 @@ async function run() {
 function download() {
   const r = state.results[state.tab];
   if (!r) return;
-  const suffix = state.tab === 'bg' ? '-cutout' : state.tab === 'scribble' ? '-scribble' : '';
   const a = document.createElement('a');
   a.href = r.url;
-  a.download = `${baseName(state.file.name)}${suffix}.${r.ext}`;
+  a.download = `${baseName(state.file.name)}${DL_SUFFIX[state.tab]}.${r.ext}`;
   document.body.appendChild(a);
   a.click();
   a.remove();
 }
 
-function downloadTimelapse(kind) {
-  const r = state.results.scribble;
-  const item = kind === 'gif' ? r?.gif : r?.video;
-  if (!item) return;
+function downloadTimelapse() {
+  const tl = state.results[state.tab]?.timelapse;
+  if (!tl) return;
   const a = document.createElement('a');
-  a.href = item.url;
-  a.download = `${baseName(state.file.name)}-scribble-timelapse.${kind === 'gif' ? 'gif' : 'webm'}`;
+  a.href = tl.url;
+  a.download = `${baseName(state.file.name)}-scribble-timelapse.${tl.ext}`;
   document.body.appendChild(a);
   a.click();
   a.remove();
 }
-
-/* ============================================================
-   Zoom & pan
-   ============================================================ */
-
-const zoom = { scale: 1, x: 0, y: 0 };
-const ZOOM_MIN = 1, ZOOM_MAX = 6;
-
-function applyZoomTransform() {
-  const t = zoom.scale <= 1.001 ? '' : `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
-  el.splitView.style.transform = t;
-  el.paneViews.forEach((pv) => { pv.style.transform = t; });
-  el.zoomReset.textContent = Math.round(zoom.scale * 100) + '%';
-  const zoomed = zoom.scale > 1.001;
-  el.stageSbs.classList.toggle('can-pan', zoomed);
-  el.stageSplit.classList.toggle('can-pan', zoomed);
-}
-
-function clampPan(paneW, paneH) {
-  zoom.x = clamp(zoom.x, -(paneW * (zoom.scale - 1)), 0);
-  zoom.y = clamp(zoom.y, -(paneH * (zoom.scale - 1)), 0);
-}
-
-function resetZoom() {
-  zoom.scale = 1; zoom.x = 0; zoom.y = 0;
-  applyZoomTransform();
-}
-
-function zoomAt(factor, localX, localY, paneW, paneH) {
-  const newScale = clamp(zoom.scale * factor, ZOOM_MIN, ZOOM_MAX);
-  if (newScale === zoom.scale) return;
-  const originX = (localX - zoom.x) / zoom.scale;
-  const originY = (localY - zoom.y) / zoom.scale;
-  zoom.scale = newScale;
-  if (zoom.scale <= 1.001) {
-    zoom.scale = 1; zoom.x = 0; zoom.y = 0;
-  } else {
-    zoom.x = localX - originX * zoom.scale;
-    zoom.y = localY - originY * zoom.scale;
-    clampPan(paneW, paneH);
-  }
-  applyZoomTransform();
-}
-
-/** SBS has two equal-width panes side by side; map a client point into
-    "local pane space" so the same transform can drive both panes at once. */
-function localPointFor(name, clientX, clientY) {
-  if (name === 'split') {
-    const r = el.stageSplit.getBoundingClientRect();
-    return { x: clientX - r.left, y: clientY - r.top, w: r.width, h: r.height };
-  }
-  const r = el.stageSbs.getBoundingClientRect();
-  const paneW = r.width / 2;
-  let lx = (clientX - r.left) % paneW;
-  if (lx < 0) lx += paneW;
-  return { x: lx, y: clientY - r.top, w: paneW, h: r.height };
-}
-
-function isBlank() {
-  return el.stageSplit.classList.contains('is-blank');
-}
-
-function buttonZoom(factor) {
-  if (isBlank()) return;
-  const name = state.activeView;
-  const stage = name === 'split' ? el.stageSplit : el.stageSbs;
-  const r = stage.getBoundingClientRect();
-  const w = name === 'split' ? r.width : r.width / 2;
-  zoomAt(factor, w / 2, r.height / 2, w, r.height);
-}
-
-el.zoomIn.addEventListener('click', () => buttonZoom(1.35));
-el.zoomOut.addEventListener('click', () => buttonZoom(1 / 1.35));
-el.zoomReset.addEventListener('click', resetZoom);
-
-function wireWheelZoom(stageEl, name) {
-  stageEl.addEventListener('wheel', (e) => {
-    if (isBlank()) return;
-    e.preventDefault();
-    const p = localPointFor(name, e.clientX, e.clientY);
-    const factor = Math.exp(-e.deltaY * 0.0016);
-    zoomAt(factor, p.x, p.y, p.w, p.h);
-  }, { passive: false });
-}
-wireWheelZoom(el.stageSbs, 'sbs');
-wireWheelZoom(el.stageSplit, 'split');
-
-function wireDragPan(stageEl, name) {
-  let dragging = false, lastX = 0, lastY = 0;
-  stageEl.addEventListener('pointerdown', (e) => {
-    if (zoom.scale <= 1 || e.target.closest('.handle')) return;
-    dragging = true;
-    lastX = e.clientX; lastY = e.clientY;
-    stageEl.classList.add('is-panning');
-    stageEl.setPointerCapture(e.pointerId);
-  });
-  stageEl.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const dx = e.clientX - lastX, dy = e.clientY - lastY;
-    lastX = e.clientX; lastY = e.clientY;
-    zoom.x += dx; zoom.y += dy;
-    const r = stageEl.getBoundingClientRect();
-    clampPan(name === 'split' ? r.width : r.width / 2, r.height);
-    applyZoomTransform();
-  });
-  const end = (e) => {
-    if (!dragging) return;
-    dragging = false;
-    stageEl.classList.remove('is-panning');
-    try { stageEl.releasePointerCapture(e.pointerId); } catch { /* already released */ }
-  };
-  stageEl.addEventListener('pointerup', end);
-  stageEl.addEventListener('pointercancel', end);
-}
-wireDragPan(el.stageSbs, 'sbs');
-wireDragPan(el.stageSplit, 'split');
-
-/* ============================================================
-   Split handle
-   ============================================================ */
-
-let splitPct = 50;
-function setSplit(pct) {
-  splitPct = clamp(pct, 4, 96);
-  el.stageSplit.style.setProperty('--split', splitPct + '%');
-  el.handle.setAttribute('aria-valuenow', String(Math.round(splitPct)));
-}
-setSplit(50);
-
-(function wireHandle() {
-  let dragging = false;
-  const pctFromClientX = (clientX) => {
-    const r = el.stageSplit.getBoundingClientRect();
-    return ((clientX - r.left) / r.width) * 100;
-  };
-  el.handle.addEventListener('pointerdown', (e) => {
-    dragging = true;
-    e.stopPropagation();
-    el.handle.setPointerCapture(e.pointerId);
-  });
-  el.handle.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    setSplit(pctFromClientX(e.clientX));
-  });
-  const stop = (e) => {
-    dragging = false;
-    try { el.handle.releasePointerCapture(e.pointerId); } catch { /* already released */ }
-  };
-  el.handle.addEventListener('pointerup', stop);
-  el.handle.addEventListener('pointercancel', stop);
-  el.handle.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft') { setSplit(splitPct - 3); e.preventDefault(); }
-    else if (e.key === 'ArrowRight') { setSplit(splitPct + 3); e.preventDefault(); }
-    else if (e.key === 'Home') { setSplit(4); e.preventDefault(); }
-    else if (e.key === 'End') { setSplit(96); e.preventDefault(); }
-  });
-})();
 
 /* ============================================================
    UI wiring
@@ -948,42 +852,25 @@ document.querySelectorAll('.tab').forEach((btn) => {
       b.classList.toggle('is-active', on);
       b.setAttribute('aria-selected', String(on));
     });
+    cancelScribbleAnim();
     state.tab = btn.dataset.tab;
     el.panelBg.hidden = state.tab !== 'bg';
     el.panelConvert.hidden = state.tab !== 'convert';
     el.panelScribble.hidden = state.tab !== 'scribble';
-    el.runBtn.textContent = TAB_LABELS[state.tab] || 'Run';
+    el.runBtn.textContent = RUN_LABEL[state.tab];
     clearError();
     hideProgress();
-
-    // Each tab keeps its own result.
-    const r = state.results[state.tab];
-    if (r) {
-      el.imgAfterSplit.src = r.url;
-      el.imgAfterSbs.src = r.url;
-      markBlank(false);
-      el.roResult.textContent = `${r.w}×${r.h} · ${fmtBytes(r.blob.size)} · ${r.ext.toUpperCase()}`;
-      el.roTime.textContent = r.ms < 1000 ? `${r.ms} ms` : `${(r.ms / 1000).toFixed(2)} s`;
-      el.downloadBtn.disabled = false;
-    } else {
-      markBlank(true);
-      el.roResult.textContent = '—';
-      el.roTime.textContent = '—';
-      el.downloadBtn.disabled = true;
-    }
-    syncTimelapseButtons();
+    showResult(state.tab);   // each tab keeps its own result
   });
 });
 
-/* --- comparison view (only the two data-view segmented buttons — not the zoom group) --- */
+/* --- comparison view --- */
 document.querySelectorAll('.seg__btn[data-view]').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.seg__btn[data-view]').forEach((b) => b.classList.toggle('is-active', b === btn));
     const split = btn.dataset.view === 'split';
     el.stageSplit.hidden = !split;
     el.stageSbs.hidden = split;
-    state.activeView = split ? 'split' : 'sbs';
-    resetZoom();
   });
 });
 
@@ -1030,7 +917,7 @@ const HINTS = {
   'image/webp':    'Smaller than PNG at similar quality, and it keeps alpha.',
   'image/avif':    'Smallest files, keeps alpha. Chrome and Edge can write it; Safari and Firefox cannot.',
   'image/bmp':     'Uncompressed 24-bit. Large files, no alpha. Only for tools that demand it.',
-  'image/svg+xml': 'Traces the image into real vector paths, with a smoothing pass first. Built for flat art, not photographs.',
+  'image/svg+xml': 'Traces the image into real vector paths. Built for flat art, not photographs.',
 };
 
 function updateConvertUI() {
@@ -1060,22 +947,27 @@ el.tcDetail.addEventListener('input', () => {
 });
 
 /* --- scribble panel --- */
-el.scWeight.addEventListener('input', () => {
-  el.scWeightVal.textContent = SC_WEIGHT_WORDS[parseInt(el.scWeight.value, 10) - 1];
-});
-el.scColors.addEventListener('input', () => {
-  el.scColorsVal.textContent = el.scColors.value;
-});
+const WEIGHT_LABELS = [
+  'Ballpoint', 'Fine pen', 'Pencil', 'Fine marker', 'Marker',
+  'Chunky marker', 'Crayon', 'Chunky crayon', 'Fat crayon', 'Fistful of crayon',
+];
+function updateWeightLabel() {
+  el.scWeightVal.textContent = WEIGHT_LABELS[parseInt(el.scWeight.value, 10) - 1];
+}
+el.scWeight.addEventListener('input', updateWeightLabel);
+el.scColors.addEventListener('input', () => { el.scColorsVal.textContent = el.scColors.value; });
 
 /* --- actions --- */
 el.runBtn.addEventListener('click', run);
 el.downloadBtn.addEventListener('click', download);
-el.timelapseWebmBtn.addEventListener('click', () => downloadTimelapse('webm'));
-el.timelapseGifBtn.addEventListener('click', () => downloadTimelapse('gif'));
+el.timelapseBtn.addEventListener('click', downloadTimelapse);
 
 /* --- boot --- */
 (async function boot() {
   updateConvertUI();
+  updateWeightLabel();
+  applySplit();
+  applyZoom();
   let avif = false;
   try { avif = await canEncode('image/avif'); } catch { avif = false; }
   if (!avif) {
@@ -1085,11 +977,4 @@ el.timelapseGifBtn.addEventListener('click', () => downloadTimelapse('gif'));
   }
   // Decoding AVIF is far more widespread than encoding it, so list it either way.
   el.acceptedFormats.textContent += ' · AVIF';
-
-  if (!scribbleControlsEnabled()) {
-    el.scTimelapse.checked = false;
-    el.scTimelapse.disabled = true;
-    const hint = el.scTimelapse.closest('.field')?.querySelector('.field__hint');
-    if (hint) hint.textContent = "This browser can't record canvas video, so the timelapse recording is unavailable here — the scribble itself still works fine.";
-  }
 })();
