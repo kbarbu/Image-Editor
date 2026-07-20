@@ -102,10 +102,10 @@
 
       <!-- READOUT -->
       <dl class="readout mono" id="readout">
-        <div class="readout__cell"><dt>File</dt><dd id="roName">&mdash;</dd></div>
-        <div class="readout__cell"><dt>Source</dt><dd id="roSource">&mdash;</dd></div>
-        <div class="readout__cell"><dt>Result</dt><dd id="roResult">&mdash;</dd></div>
-        <div class="readout__cell"><dt>Elapsed</dt><dd id="roTime">&mdash;</dd></div>
+        <div class="readout__cell"><dt>File</dt><dd id="roName">-</dd></div>
+        <div class="readout__cell"><dt>Source</dt><dd id="roSource">-</dd></div>
+        <div class="readout__cell"><dt>Result</dt><dd id="roResult">-</dd></div>
+        <div class="readout__cell"><dt>Elapsed</dt><dd id="roTime">-</dd></div>
       </dl>
     </div>
 
@@ -126,15 +126,15 @@
               <input type="color" id="bgCustomColor" value="#CE1F2E" aria-label="Custom backdrop color">
             </button>
           </div>
-          <p class="field__hint">Transparent needs PNG or WEBP. JPEG has no alpha channel &mdash; pick a solid backdrop for it.</p>
+          <p class="field__hint">Transparent needs PNG or WEBP. JPEG has no alpha channel, pick a solid backdrop for it.</p>
         </div>
 
         <div class="field">
           <label class="field__label mono" for="bgModel">Model</label>
           <select id="bgModel">
-            <option value="isnet">Full &mdash; best edges, largest download</option>
-            <option value="isnet_fp16" selected>Half precision &mdash; balanced</option>
-            <option value="isnet_quint8">Quantized &mdash; fastest, softest edges</option>
+            <option value="isnet">Full: best edges, largest download</option>
+            <option value="isnet_fp16" selected>Half precision: balanced</option>
+            <option value="isnet_quint8">Quantized: fastest, softest edges</option>
           </select>
         </div>
 
@@ -193,7 +193,7 @@
             <option value="image/webp">WEBP</option>
             <option value="image/avif">AVIF</option>
             <option value="image/bmp">BMP</option>
-            <option value="image/svg+xml">SVG &mdash; traced vector</option>
+            <option value="image/svg+xml">SVG: traced vector</option>
           </select>
           <p class="field__hint" id="cvFormatHint"></p>
         </div>
@@ -225,7 +225,7 @@
           <div class="field">
             <label class="field__label mono" for="tcColors">Colors <b class="mono" id="tcColorsVal">8</b></label>
             <input type="range" id="tcColors" min="2" max="32" step="1" value="8">
-            <p class="field__hint">Flat logos trace cleanly at 2&ndash;8. Photographs will not trace well at any setting.</p>
+            <p class="field__hint">Flat logos trace cleanly at 2-8. Photographs will not trace well at any setting.</p>
           </div>
           <div class="field">
             <label class="field__label mono" for="tcDetail">Detail <b class="mono" id="tcDetailVal">Balanced</b></label>
@@ -308,7 +308,7 @@
         <div class="field">
           <label class="field__label mono" for="scDetail">Details <b class="mono" id="scDetailVal">Casual</b></label>
           <input type="range" id="scDetail" min="1" max="10" step="1" value="5">
-          <p class="field__hint">Low leaves big patches of empty paper and skips the small stuff. High colors in nearly everything &mdash; and takes a little longer.</p>
+          <p class="field__hint">Low leaves big patches of empty paper and skips the small stuff. High colors in nearly everything, and takes a little longer.</p>
         </div>
 
         <div class="field">
@@ -319,7 +319,7 @@
           <p class="field__hint">Draws the scribble stroke by stroke in the viewer and records it as a video you can download.</p>
         </div>
 
-        <p class="field__hint">Saves as a transparent PNG. The gaps and odd-shaped holes are part of the look &mdash; and every run scribbles differently, so if you don't like one, just run it again.</p>
+        <p class="field__hint">Saves as a transparent PNG. The gaps and odd-shaped holes are part of the look, and every run scribbles differently, so if you don't like one, just run it again.</p>
       </div>
 
       <!-- ---- ACTIONS ---- -->
@@ -339,7 +339,7 @@
 </main>
 
 <footer class="footnote mono">
-  Runs entirely in your browser. Images never leave this machine &mdash; only the model weights are fetched, once, then cached.
+  Runs entirely in your browser. Images never leave this machine. Only the model weights are fetched, once, then cached.
 </footer>
 
 <div class="brushcursor" id="brushCursor" hidden></div>

@@ -1,7 +1,7 @@
 /* ============================================================
    Image Bench
    Palette : cool graphite lab bench
-   Accent  : rubylith — the ruby masking film cut by hand in
+   Accent  : rubylith: the ruby masking film cut by hand in
              prepress to knock out backgrounds. Same job as
              this tool, eighty years earlier.
    ============================================================ */
@@ -172,7 +172,7 @@ body {
 
 .dropzone__inner { text-align: center; padding: 32px; }
 
-/* The board rotates a quarter turn on hover — a sheet of ruby
+/* The board rotates a quarter turn on hover a sheet of ruby
    film being laid down over the checkerboard beneath it. */
 .dropzone__board {
   width: 76px; height: 76px;
@@ -304,7 +304,7 @@ body {
 }
 
 /* Images and live canvases fill the plane with object-fit, so a 12000px
-   source can never inflate the layout — display and export are separate. */
+   source can never inflate the layout display and export are separate. */
 .fit {
   position: absolute;
   left: 14px; top: 14px;
@@ -351,7 +351,7 @@ body {
 }
 .stage.is-blank .stage__empty { display: block; }
 
-/* Split handle — rubylith */
+/* Split handle rubylith */
 .handle {
   position: absolute;
   top: 0; bottom: 0;

@@ -1,5 +1,5 @@
 /* ============================================================
-   Scribble core — turns an image into kid-crayon scribble strokes.
+   Scribble core: turns an image into kid-crayon scribble strokes.
    Pure logic + canvas drawing. No DOM assumptions beyond 2d ctx.
    Exported as an object so the same file runs in node and browser.
    ============================================================ */
@@ -198,7 +198,7 @@ const ScribbleCore = (() => {
       const c = cells[randi(cells.length)];
       let x = c % w, y = Math.floor(c / w);
       if (inHole(x, y)) continue;
-      // Prefer virgin ground — this is what fills the region instead of
+      // Prefer virgin ground this is what fills the region instead of
       // scribbling the same spot forever.
       if (covered[c] && Math.random() < 0.75) continue;
 
@@ -291,7 +291,7 @@ const ScribbleCore = (() => {
     ctx.stroke();
   }
 
-  /** 3×3 majority vote over a label map — melts speckle noise into clean
+  /** 3×3 majority vote over a label map melts speckle noise into clean
       regions so traced paths come out smooth. Used by the vectorizer. */
   function modeFilter(labels, w, h, passes = 1) {
     let src = labels;

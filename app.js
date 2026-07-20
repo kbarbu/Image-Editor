@@ -1,5 +1,5 @@
 /* ============================================================
-   Image Bench — app logic
+   Image Bench: app logic
    Everything runs client-side. Only model weights are fetched.
    ============================================================ */
 
@@ -161,7 +161,7 @@ function canvasToBlob(canvas, mime, quality) {
   });
 }
 
-/** 24-bit BMP encoder — browsers can't do this natively. */
+/** 24-bit BMP encoder browsers can't do this natively. */
 function encodeBMP(imageData) {
   const { width: w, height: h, data } = imageData;
   const rowSize = Math.floor((24 * w + 31) / 32) * 4;
@@ -302,8 +302,8 @@ async function loadFile(file) {
   el.roName.textContent = file.name;
   el.roName.title = file.name;
   el.roSource.textContent = `${state.srcW}×${state.srcH} · ${fmtBytes(file.size)}`;
-  el.roResult.textContent = '—';
-  el.roTime.textContent = '—';
+  el.roResult.textContent = '-';
+  el.roTime.textContent = '-';
 
   el.dropzone.hidden = true;
   el.workspace.hidden = false;
@@ -436,7 +436,7 @@ function setSplitFromClient(clientX, rect) {
 function stagePointerDown(stage, e) {
   if (e.button !== 0) return;
 
-  /* 1 — eyedropper */
+  /* 1 eyedropper */
   if (state.pickMode) {
     const p = clientToSrc(e.clientX, e.clientY, planeBoxFor(e, stage));
     if (p) samplePickColor(p);
@@ -444,7 +444,7 @@ function stagePointerDown(stage, e) {
     return;
   }
 
-  /* 2 — touch-up brush */
+  /* 2 touch-up brush */
   const onHandle = !!e.target.closest?.('.handle');
   if (state.tool && state.tab === 'bg' && state.edit && !onHandle) {
     e.preventDefault();
@@ -454,7 +454,7 @@ function stagePointerDown(stage, e) {
 
   const rect = stage.getBoundingClientRect();
 
-  /* 3 — split line (split stage only) */
+  /* 3 split line (split stage only) */
   if (stage === el.stageSplit) {
     const xf = (e.clientX - rect.left) / rect.width;
     const handleS = state.zoom.fx + state.splitF * state.zoom.z;
@@ -469,7 +469,7 @@ function stagePointerDown(stage, e) {
     }
   }
 
-  /* 4 — pan */
+  /* 4 pan */
   if (state.zoom.z > 1.001) {
     e.preventDefault();
     const unit = stage === el.stageSbs
@@ -901,7 +901,7 @@ async function traceToSVG() {
   const d = DETAIL[parseInt(el.tcDetail.value, 10)];
   const K = parseInt(el.tcColors.value, 10);
 
-  // Work at 2× the source (capped) — the tracer smooths in supersampled
+  // Work at 2× the source (capped) the tracer smooths in supersampled
   // units, which halves the visible wobble at display size.
   const W = Math.min(2048, Math.max(state.srcW, state.srcH) * 2);
   const k = W / Math.max(state.srcW, state.srcH);
@@ -933,7 +933,7 @@ async function traceToSVG() {
     }
   }
 
-  setProgress(65, 'Tracing curves — this is the slow part');
+  setProgress(65, 'Tracing curves: this is the slow part');
   await nextFrame();
 
   const svg = ImageTracer.imagedataToSVG({ width: w, height: h, data: flat }, {
@@ -1040,7 +1040,7 @@ async function runScribble() {
 
   const detail = parseInt(el.scDetail.value, 10);
 
-  // Analysis size follows detail — a finer grid resolves smaller features.
+  // Analysis size follows detail a finer grid resolves smaller features.
   const A = 150 + detail * 18;
   const ka = Math.min(1, A / Math.max(state.srcW, state.srcH));
   const aw = Math.max(2, Math.round(state.srcW * ka));
@@ -1063,7 +1063,7 @@ async function runScribble() {
     weight: parseInt(el.scWeight.value, 10),
     detail,
   });
-  if (!strokes.length) throw new Error('Nothing to scribble — the image looks fully transparent.');
+  if (!strokes.length) throw new Error('Nothing to scribble. The image looks fully transparent.');
 
   const master = document.createElement('canvas');
   master.width = ow; master.height = oh;
@@ -1184,8 +1184,8 @@ function showResult(tab) {
     el.timelapseBtn.hidden = !r.timelapse;
   } else {
     markBlank(true);
-    el.roResult.textContent = '—';
-    el.roTime.textContent = '—';
+    el.roResult.textContent = '-';
+    el.roTime.textContent = '-';
     el.downloadBtn.disabled = true;
     el.timelapseBtn.hidden = true;
   }
@@ -1380,7 +1380,7 @@ const HINTS = {
   'image/webp':    'Smaller than PNG at similar quality, and it keeps alpha.',
   'image/avif':    'Smallest files, keeps alpha. Chrome and Edge can write it; Safari and Firefox cannot.',
   'image/bmp':     'Uncompressed 24-bit. Large files, no alpha. Only for tools that demand it.',
-  'image/svg+xml': 'Rebuilds the image as clean vector shapes — flat colors, smooth curves. Made for logos and flat art, not photographs.',
+  'image/svg+xml': 'Rebuilds the image as clean vector shapes: flat colors, smooth curves. Made for logos and flat art, not photographs.',
 };
 
 function updateConvertUI() {
@@ -1466,7 +1466,7 @@ el.timelapseBtn.addEventListener('click', downloadTimelapse);
   try { avif = await canEncode('image/avif'); } catch { avif = false; }
   if (!avif) {
     const opt = el.cvFormat.querySelector('option[value="image/avif"]');
-    opt.textContent = 'AVIF — this browser cannot write it';
+    opt.textContent = 'AVIF: this browser cannot write it';
     opt.disabled = true;
   }
   // Decoding AVIF is far more widespread than encoding it, so list it either way.
