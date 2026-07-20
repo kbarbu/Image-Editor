@@ -19,10 +19,14 @@ const el = {
   handle: $('handle'), checkerToggle: $('checkerToggle'),
   zoomIn: $('zoomIn'), zoomOut: $('zoomOut'), zoomReset: $('zoomReset'),
   roName: $('roName'), roSource: $('roSource'), roResult: $('roResult'), roTime: $('roTime'),
-  panelBg: $('panel-bg'), panelConvert: $('panel-convert'), panelScribble: $('panel-scribble'),
+  panelBg: $('panel-bg'), panelConvert: $('panel-convert'),
+  panelColorize: $('panel-colorize'), panelScribble: $('panel-scribble'),
   bgModel: $('bgModel'), bgDevice: $('bgDevice'), bgFormat: $('bgFormat'),
   bgQuality: $('bgQuality'), bgQualityField: $('bgQualityField'), bgQualityVal: $('bgQualityVal'),
   bgCustomColor: $('bgCustomColor'),
+  tuField: $('tuField'), tuErase: $('tuErase'), tuRestore: $('tuRestore'),
+  tuSize: $('tuSize'), tuSizeVal: $('tuSizeVal'), tuSmart: $('tuSmart'), tuReset: $('tuReset'),
+  tuHint: $('tuHint'), brushCursor: $('brushCursor'),
   cvFormat: $('cvFormat'), cvFormatHint: $('cvFormatHint'),
   cvQuality: $('cvQuality'), cvQualityField: $('cvQualityField'), cvQualityVal: $('cvQualityVal'),
   cvScale: $('cvScale'), cvScaleVal: $('cvScaleVal'), cvOutDims: $('cvOutDims'),
@@ -31,8 +35,13 @@ const el = {
   tcColors: $('tcColors'), tcColorsVal: $('tcColorsVal'),
   tcDetail: $('tcDetail'), tcDetailVal: $('tcDetailVal'),
   tcKeepTransparent: $('tcKeepTransparent'),
+  czColor: $('czColor'), czStrength: $('czStrength'), czStrengthVal: $('czStrengthVal'),
+  czReplace: $('czReplace'), czReplaceOpts: $('czReplaceOpts'),
+  czFrom: $('czFrom'), czPick: $('czPick'),
+  czLikeness: $('czLikeness'), czLikenessVal: $('czLikenessVal'),
   scWeight: $('scWeight'), scWeightVal: $('scWeightVal'),
   scColors: $('scColors'), scColorsVal: $('scColorsVal'),
+  scDetail: $('scDetail'), scDetailVal: $('scDetailVal'),
   scTimelapse: $('scTimelapse'),
   progress: $('progress'), progressFill: $('progressFill'), progressLabel: $('progressLabel'),
   errorBox: $('errorBox'), runBtn: $('runBtn'),
@@ -46,12 +55,17 @@ const state = {
   srcImg: null,
   srcW: 0, srcH: 0,
   srcURL: null,
+  sampCanvas: null,               // source pixels for the eyedropper
   bgBackdrop: 'transparent',
   cvBackdrop: '#FFFFFF',
-  results: { bg: null, convert: null, scribble: null },  // { blob, url, w, h, ms, ext, timelapse? }
+  czMode: 'tint',
+  results: { bg: null, convert: null, colorize: null, scribble: null },
   busy: false,
   splitF: 0.5,                    // split position, fraction of the content plane
   zoom: { z: 1, fx: 0, fy: 0 },   // scale + pan (fractions of the plane)
+  pickMode: false,                // eyedropper armed
+  tool: null,                     // 'erase' | 'restore' | null
+  edit: null,                     // touch-up session for the bg result
 };
 
 const EXT = {
@@ -60,8 +74,9 @@ const EXT = {
 };
 const LOSSY = new Set(['image/jpeg', 'image/webp', 'image/avif']);
 const NO_ALPHA = new Set(['image/jpeg', 'image/bmp']);
-const RUN_LABEL = { bg: 'Remove background', convert: 'Convert', scribble: 'Scribble it' };
-const DL_SUFFIX = { bg: '-cutout', convert: '', scribble: '-scribble' };
+const RUN_LABEL = { bg: 'Remove background', convert: 'Convert', colorize: 'Colorize', scribble: 'Scribble it' };
+const DL_SUFFIX = { bg: '-cutout', convert: '', colorize: '-colorized', scribble: '-scribble' };
+const PANELS = { bg: 'panelBg', convert: 'panelConvert', colorize: 'panelColorize', scribble: 'panelScribble' };
 
 /* ============================================================
    Utilities
@@ -89,6 +104,44 @@ function setProgress(pct, label) {
   el.progressLabel.textContent = label;
 }
 function hideProgress() { el.progress.hidden = true; el.progressFill.style.width = '0%'; }
+
+const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
+
+/* ---- color helpers ---- */
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const l = (mx + mn) / 2;
+  if (mx === mn) return [0, 0, l];
+  const d = mx - mn;
+  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  let h;
+  if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (mx === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return [h, s, l];
+}
+function hslToRgb(h, s, l) {
+  if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = (t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  return [f(h + 1 / 3), f(h), f(h - 1 / 3)].map((v) => Math.round(v * 255));
+}
 
 /** Detect whether this browser can actually encode a given mime. */
 async function canEncode(mime) {
@@ -215,6 +268,10 @@ async function loadFile(file) {
 
   clearError();
   cancelScribbleAnim();
+  setTool(null);
+  state.edit = null;
+  state.pickMode = false;
+  el.czPick.classList.remove('is-on');
   releaseResults();
   if (state.srcURL) URL.revokeObjectURL(state.srcURL);
 
@@ -235,6 +292,10 @@ async function loadFile(file) {
 
   state.file = file;
 
+  // Sampling canvas for the eyedropper (capped: color precision ≠ resolution).
+  const sk = Math.min(1, 2200 / Math.max(state.srcW, state.srcH));
+  state.sampCanvas = rasterize(state.srcImg, state.srcW * sk, state.srcH * sk, null);
+
   el.imgBeforeSplit.src = state.srcURL;
   el.imgBeforeSbs.src = state.srcURL;
 
@@ -250,6 +311,7 @@ async function loadFile(file) {
   markBlank(true);
   el.downloadBtn.disabled = true;
   el.timelapseBtn.hidden = true;
+  el.tuField.hidden = true;
   resetZoom();
   state.splitF = 0.5;
   applySplit();
@@ -282,7 +344,7 @@ function applyZoom() {
   el.splitView.style.transform = t;
   document.querySelectorAll('.pane__view').forEach((v) => { v.style.transform = t; });
   el.zoomReset.textContent = Math.round(z * 100) + '%';
-  const pannable = z > 1.001;
+  const pannable = z > 1.001 && !state.tool;
   el.stageSplit.classList.toggle('can-pan', pannable);
   el.stageSbs.classList.toggle('can-pan', pannable);
   updateHandle();
@@ -339,7 +401,30 @@ function wireWheelZoom(stage, unitFor) {
 wireWheelZoom(el.stageSplit, () => el.stageSplit);
 wireWheelZoom(el.stageSbs, (e) => e.target.closest('.pane') || el.stageSbs.querySelector('.pane'));
 
-/* --- pointer interactions: drag the split line, or pan when zoomed --- */
+/** Map a client point to source-image pixel coordinates, given the plane box
+    (the split stage, or one sbs pane). Accounts for zoom, pan, the 14px
+    frame, and object-fit: contain letterboxing. Returns null outside. */
+function clientToSrc(clientX, clientY, box) {
+  const r = box.getBoundingClientRect();
+  const xf = (clientX - r.left) / r.width;
+  const yf = (clientY - r.top) / r.height;
+  const u = (xf - state.zoom.fx) / state.zoom.z;
+  const v = (yf - state.zoom.fy) / state.zoom.z;
+  const bw = r.width - 28, bh = r.height - 28;
+  const px = u * r.width - 14, py = v * r.height - 14;
+  const sc = Math.min(bw / state.srcW, bh / state.srcH);
+  const ox = (bw - state.srcW * sc) / 2, oy = (bh - state.srcH * sc) / 2;
+  const ix = (px - ox) / sc, iy = (py - oy) / sc;
+  if (ix < 0 || iy < 0 || ix >= state.srcW || iy >= state.srcH) return null;
+  return { x: ix, y: iy, cssPerImagePx: sc * state.zoom.z };
+}
+
+function planeBoxFor(e, stage) {
+  if (stage === el.stageSbs) return e.target.closest('.pane') || el.stageSbs.querySelector('.pane');
+  return stage;
+}
+
+/* --- pointer interactions: eyedropper > brush > split line > pan --- */
 let drag = null;
 
 function setSplitFromClient(clientX, rect) {
@@ -348,46 +433,64 @@ function setSplitFromClient(clientX, rect) {
   applySplit();
 }
 
-el.stageSplit.addEventListener('pointerdown', (e) => {
+function stagePointerDown(stage, e) {
   if (e.button !== 0) return;
-  const rect = el.stageSplit.getBoundingClientRect();
-  const xf = (e.clientX - rect.left) / rect.width;
-  const handleS = state.zoom.fx + state.splitF * state.zoom.z;
-  const blank = el.stageSplit.classList.contains('is-blank');
-  const nearHandle = Math.abs(xf - handleS) * rect.width < 24;
 
-  let mode = null;
-  if (!blank && (nearHandle || state.zoom.z <= 1.001)) mode = 'split';
-  else if (state.zoom.z > 1.001) mode = 'pan';
-  if (!mode) return;
+  /* 1 — eyedropper */
+  if (state.pickMode) {
+    const p = clientToSrc(e.clientX, e.clientY, planeBoxFor(e, stage));
+    if (p) samplePickColor(p);
+    e.preventDefault();
+    return;
+  }
 
-  e.preventDefault();
-  drag = {
-    mode, sx: e.clientX, sy: e.clientY,
-    fx: state.zoom.fx, fy: state.zoom.fy,
-    unitW: rect.width, unitH: rect.height, rect,
-    stage: el.stageSplit,
-  };
-  el.stageSplit.setPointerCapture(e.pointerId);
-  if (mode === 'split') setSplitFromClient(e.clientX, rect);
-  else el.stageSplit.classList.add('is-panning');
-});
+  /* 2 — touch-up brush */
+  const onHandle = !!e.target.closest?.('.handle');
+  if (state.tool && state.tab === 'bg' && state.edit && !onHandle) {
+    e.preventDefault();
+    beginPaint(stage, e);
+    return;
+  }
 
-el.stageSbs.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0 || state.zoom.z <= 1.001) return;
-  e.preventDefault();
-  const pane = el.stageSbs.querySelector('.pane').getBoundingClientRect();
-  drag = {
-    mode: 'pan', sx: e.clientX, sy: e.clientY,
-    fx: state.zoom.fx, fy: state.zoom.fy,
-    unitW: pane.width, unitH: pane.height,
-    stage: el.stageSbs,
-  };
-  el.stageSbs.setPointerCapture(e.pointerId);
-  el.stageSbs.classList.add('is-panning');
-});
+  const rect = stage.getBoundingClientRect();
+
+  /* 3 — split line (split stage only) */
+  if (stage === el.stageSplit) {
+    const xf = (e.clientX - rect.left) / rect.width;
+    const handleS = state.zoom.fx + state.splitF * state.zoom.z;
+    const blank = stage.classList.contains('is-blank');
+    const nearHandle = Math.abs(xf - handleS) * rect.width < 24;
+    if (!blank && (nearHandle || (state.zoom.z <= 1.001 && !state.tool))) {
+      e.preventDefault();
+      drag = { mode: 'split', rect, stage };
+      stage.setPointerCapture(e.pointerId);
+      setSplitFromClient(e.clientX, rect);
+      return;
+    }
+  }
+
+  /* 4 — pan */
+  if (state.zoom.z > 1.001) {
+    e.preventDefault();
+    const unit = stage === el.stageSbs
+      ? el.stageSbs.querySelector('.pane').getBoundingClientRect()
+      : rect;
+    drag = {
+      mode: 'pan', sx: e.clientX, sy: e.clientY,
+      fx: state.zoom.fx, fy: state.zoom.fy,
+      unitW: unit.width, unitH: unit.height, stage,
+    };
+    stage.setPointerCapture(e.pointerId);
+    stage.classList.add('is-panning');
+  }
+}
+
+el.stageSplit.addEventListener('pointerdown', (e) => stagePointerDown(el.stageSplit, e));
+el.stageSbs.addEventListener('pointerdown', (e) => stagePointerDown(el.stageSbs, e));
 
 function onDragMove(e) {
+  if (state.tool) updateBrushCursor(e);
+  if (paintDrag) { paintMove(e); return; }
   if (!drag) return;
   if (drag.mode === 'split') {
     setSplitFromClient(e.clientX, drag.rect);
@@ -398,7 +501,8 @@ function onDragMove(e) {
     applyZoom();
   }
 }
-function onDragEnd() {
+function onDragEnd(e) {
+  if (paintDrag) { endPaint(e); return; }
   if (!drag) return;
   drag.stage.classList.remove('is-panning');
   drag = null;
@@ -407,6 +511,7 @@ for (const stage of [el.stageSplit, el.stageSbs]) {
   stage.addEventListener('pointermove', onDragMove);
   stage.addEventListener('pointerup', onDragEnd);
   stage.addEventListener('pointercancel', onDragEnd);
+  stage.addEventListener('pointerleave', () => { el.brushCursor.hidden = true; });
 }
 
 el.handle.addEventListener('keydown', (e) => {
@@ -414,6 +519,260 @@ el.handle.addEventListener('keydown', (e) => {
   e.preventDefault();
   state.splitF = clamp(state.splitF + (e.key === 'ArrowRight' ? 0.02 : -0.02), 0, 1);
   applySplit();
+});
+
+/* ============================================================
+   Eyedropper (colorizer "pick from image")
+   ============================================================ */
+
+function samplePickColor(p) {
+  const c = state.sampCanvas;
+  const kx = c.width / state.srcW;
+  const d = c.getContext('2d').getImageData(
+    clamp(Math.round(p.x * kx), 0, c.width - 1),
+    clamp(Math.round(p.y * kx), 0, c.height - 1),
+    1, 1
+  ).data;
+  el.czFrom.value = rgbToHex(d[0], d[1], d[2]);
+  state.pickMode = false;
+  el.czPick.classList.remove('is-on');
+  document.body.classList.remove('is-picking');
+}
+
+el.czPick.addEventListener('click', () => {
+  state.pickMode = !state.pickMode;
+  el.czPick.classList.toggle('is-on', state.pickMode);
+  document.body.classList.toggle('is-picking', state.pickMode);
+});
+
+/* ============================================================
+   Touch-up: erase / restore the background-removal result
+   ============================================================ */
+
+let paintDrag = null;
+
+function setTool(tool) {
+  state.tool = state.tool === tool ? null : tool;   // toggle off on second click
+  if (tool === null) state.tool = null;
+  el.tuErase.classList.toggle('is-on', state.tool === 'erase');
+  el.tuRestore.classList.toggle('is-on', state.tool === 'restore');
+  el.brushCursor.hidden = true;
+
+  if (state.tool && !state.edit) initEdit();
+  if (state.tool) {
+    enterEditDisplay();
+  } else {
+    el.brushCursor.hidden = true;
+    finalizeEdit();   // re-encode + swap back to <img> display
+  }
+  applyZoom();  // updates the can-pan cursor state
+}
+
+function initEdit() {
+  const r = state.results.bg;
+  if (!r?.editCanvas) return;
+  const w = r.editCanvas.width, h = r.editCanvas.height;
+  const cutData = r.editCanvas.getContext('2d').getImageData(0, 0, w, h);
+  const orig = rasterize(state.srcImg, w, h, null)
+    .getContext('2d').getImageData(0, 0, w, h);
+  const mask = new Uint8ClampedArray(w * h);
+  for (let i = 0; i < w * h; i++) mask[i] = cutData.data[i * 4 + 3];
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  state.edit = {
+    w, h, orig: orig.data, mask,
+    pristine: mask.slice(),
+    canvas, ctx: canvas.getContext('2d'),
+    dirty: false, encoding: null,
+  };
+  compositeEdit(0, 0, w, h);
+}
+
+/** Rebuild a region of the display canvas: original RGB × edited alpha. */
+function compositeEdit(x0, y0, x1, y1) {
+  const ed = state.edit;
+  x0 = clamp(Math.floor(x0), 0, ed.w); y0 = clamp(Math.floor(y0), 0, ed.h);
+  x1 = clamp(Math.ceil(x1), 0, ed.w);  y1 = clamp(Math.ceil(y1), 0, ed.h);
+  const rw = x1 - x0, rh = y1 - y0;
+  if (rw <= 0 || rh <= 0) return;
+  const out = new ImageData(rw, rh);
+  for (let y = 0; y < rh; y++) {
+    for (let x = 0; x < rw; x++) {
+      const si = ((y + y0) * ed.w + (x + x0));
+      const di = (y * rw + x) * 4;
+      out.data[di] = ed.orig[si * 4];
+      out.data[di + 1] = ed.orig[si * 4 + 1];
+      out.data[di + 2] = ed.orig[si * 4 + 2];
+      out.data[di + 3] = ed.mask[si];
+    }
+  }
+  ed.ctx.putImageData(out, x0, y0);
+}
+
+function enterEditDisplay() {
+  const ed = state.edit;
+  if (!ed) return;
+  for (const cv of [el.liveSplit, el.liveSbs]) {
+    cv.width = ed.w; cv.height = ed.h;
+    cv.hidden = false;
+  }
+  el.imgAfterSplit.style.visibility = 'hidden';
+  el.imgAfterSbs.style.visibility = 'hidden';
+  refreshEditDisplay();
+}
+
+function refreshEditDisplay() {
+  const ed = state.edit;
+  if (!ed) return;
+  for (const cv of [el.liveSplit, el.liveSbs]) {
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, ed.w, ed.h);
+    ctx.drawImage(ed.canvas, 0, 0);
+  }
+}
+
+async function finalizeEdit() {
+  const ed = state.edit;
+  const restoreImgs = () => {
+    el.liveSplit.hidden = true;
+    el.liveSbs.hidden = true;
+    el.imgAfterSplit.style.visibility = '';
+    el.imgAfterSbs.style.visibility = '';
+  };
+  if (!ed || !ed.dirty) { restoreImgs(); return; }
+
+  ed.dirty = false;
+  const r = state.results.bg;
+  const mime = { png: 'image/png', webp: 'image/webp' }[r.ext] || 'image/png';
+  const blob = await canvasToBlob(ed.canvas, mime,
+    LOSSY.has(mime) ? parseFloat(el.bgQuality.value) : undefined);
+
+  const prevUrl = r.url;
+  r.blob = blob;
+  r.url = URL.createObjectURL(blob);
+  r.editCanvas.getContext('2d').clearRect(0, 0, ed.w, ed.h);
+  r.editCanvas.getContext('2d').drawImage(ed.canvas, 0, 0);
+  setTimeout(() => URL.revokeObjectURL(prevUrl), 1500);
+
+  restoreImgs();
+  if (state.tab === 'bg') showResult('bg');
+}
+
+function beginPaint(stage, e) {
+  const box = planeBoxFor(e, stage);
+  const p = clientToSrc(e.clientX, e.clientY, box);
+  const ed = state.edit;
+  if (!ed) return;
+  // brush size slider is in screen px; convert to edit-canvas px
+  const editPerSrc = ed.w / state.srcW;
+  const r = p
+    ? (parseInt(el.tuSize.value, 10) / 2 / p.cssPerImagePx) * editPerSrc
+    : 12;
+  paintDrag = { box, r: Math.max(1.5, r), last: null, stage, moved: false };
+  stage.setPointerCapture(e.pointerId);
+  paintMove(e);
+}
+
+function paintMove(e) {
+  const pd = paintDrag;
+  const ed = state.edit;
+  if (!pd || !ed) return;
+  const p = clientToSrc(e.clientX, e.clientY, pd.box);
+  if (!p) { pd.last = null; return; }
+  const editPerSrc = ed.w / state.srcW;
+  const pt = { x: p.x * editPerSrc, y: p.y * editPerSrc };
+  if (pd.last) {
+    const dist = Math.hypot(pt.x - pd.last.x, pt.y - pd.last.y);
+    const steps = Math.max(1, Math.ceil(dist / (pd.r / 2.5)));
+    for (let i = 1; i <= steps; i++) {
+      stamp(
+        pd.last.x + ((pt.x - pd.last.x) * i) / steps,
+        pd.last.y + ((pt.y - pd.last.y) * i) / steps,
+        pd.r
+      );
+    }
+  } else {
+    stamp(pt.x, pt.y, pd.r);
+  }
+  pd.last = pt;
+  pd.moved = true;
+  if (!pd.raf) {
+    pd.raf = requestAnimationFrame(() => { pd.raf = null; refreshEditDisplay(); });
+  }
+}
+
+function endPaint(e) {
+  const pd = paintDrag;
+  paintDrag = null;
+  if (pd?.raf) cancelAnimationFrame(pd.raf);
+  refreshEditDisplay();
+  if (state.edit && pd?.moved) state.edit.dirty = true;
+}
+
+/** One brush dab on the alpha mask. Smart mode weights the dab by how
+    similar each pixel is to the color under the brush center, so strokes
+    hug edges instead of plowing through them. */
+function stamp(cx, cy, r) {
+  const ed = state.edit;
+  const erase = state.tool === 'erase';
+  const smart = el.tuSmart.checked;
+  const x0 = clamp(Math.floor(cx - r), 0, ed.w - 1);
+  const x1 = clamp(Math.ceil(cx + r), 0, ed.w - 1);
+  const y0 = clamp(Math.floor(cy - r), 0, ed.h - 1);
+  const y1 = clamp(Math.ceil(cy + r), 0, ed.h - 1);
+
+  let c0 = null;
+  if (smart) {
+    const ci = (clamp(Math.round(cy), 0, ed.h - 1) * ed.w + clamp(Math.round(cx), 0, ed.w - 1)) * 4;
+    c0 = [ed.orig[ci], ed.orig[ci + 1], ed.orig[ci + 2]];
+  }
+
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - cx, dy = y - cy;
+      const t = Math.sqrt(dx * dx + dy * dy) / r;
+      if (t > 1) continue;
+      let w = t < 0.62 ? 1 : 1 - (t - 0.62) / 0.38;   // soft rim
+      const i = y * ed.w + x;
+      if (smart) {
+        const o = i * 4;
+        const dr = (ed.orig[o] - c0[0]) / 255;
+        const dg = (ed.orig[o + 1] - c0[1]) / 255;
+        const db = (ed.orig[o + 2] - c0[2]) / 255;
+        const dc = Math.sqrt(dr * dr * 2 + dg * dg * 3 + db * db) / 2.449;
+        w *= dc < 0.09 ? 1 : dc > 0.24 ? 0 : 1 - (dc - 0.09) / 0.15;
+        if (!w) continue;
+      }
+      const v = w * 255;
+      ed.mask[i] = erase ? Math.max(0, ed.mask[i] - v) : Math.min(255, ed.mask[i] + v);
+    }
+  }
+  compositeEdit(x0, y0, x1 + 1, y1 + 1);
+}
+
+function updateBrushCursor(e) {
+  if (!state.tool) { el.brushCursor.hidden = true; return; }
+  const size = parseInt(el.tuSize.value, 10);
+  el.brushCursor.hidden = false;
+  el.brushCursor.style.width = size + 'px';
+  el.brushCursor.style.height = size + 'px';
+  el.brushCursor.style.left = e.clientX + 'px';
+  el.brushCursor.style.top = e.clientY + 'px';
+  el.brushCursor.classList.toggle('is-restore', state.tool === 'restore');
+}
+
+el.tuErase.addEventListener('click', () => setTool('erase'));
+el.tuRestore.addEventListener('click', () => setTool('restore'));
+el.tuSize.addEventListener('input', () => { el.tuSizeVal.textContent = el.tuSize.value + ' px'; });
+el.tuReset.addEventListener('click', () => {
+  const ed = state.edit;
+  if (!ed) return;
+  ed.mask.set(ed.pristine);
+  ed.dirty = true;
+  compositeEdit(0, 0, ed.w, ed.h);
+  if (state.tool) refreshEditDisplay();
+  else finalizeEdit();
 });
 
 /* ============================================================
@@ -490,20 +849,20 @@ async function runBackgroundRemoval() {
   const quality = LOSSY.has(mime) ? parseFloat(el.bgQuality.value) : undefined;
   const blob = await canvasToBlob(canvas, mime, quality);
 
-  return { blob, w: canvas.width, h: canvas.height, ext: EXT[mime] };
+  // Touch-up needs a live alpha channel to paint on.
+  const editable = wantsAlpha && !NO_ALPHA.has(mime);
+  return { blob, w: canvas.width, h: canvas.height, ext: EXT[mime], editCanvas: editable ? canvas : null };
 }
 
-/* ---------- Tool 2: format conversion ---------- */
+/* ---------- Tool 2: format conversion / vectorizer ---------- */
 
 const DETAIL = [
-  // Smooth presets lean hard on blur + high tolerance so jagged pixel
-  // edges melt into long curves; right-angle enhancement is off for them
-  // because it fights the smoothing by pinning corners back in place.
-  { label: 'Smoothest', ltres: 10,  qtres: 10,  pathomit: 60, blurradius: 5, blurdelta: 64, rae: false },
-  { label: 'Smooth',    ltres: 4,   qtres: 4,   pathomit: 28, blurradius: 3, blurdelta: 48, rae: false },
-  { label: 'Balanced',  ltres: 1.5, qtres: 1.5, pathomit: 10, blurradius: 1, blurdelta: 24, rae: true },
-  { label: 'Sharp',     ltres: 0.5, qtres: 0.5, pathomit: 4,  blurradius: 0, blurdelta: 20, rae: true },
-  { label: 'Sharpest',  ltres: 0.1, qtres: 0.1, pathomit: 1,  blurradius: 0, blurdelta: 20, rae: true },
+  // tol works at the 2× supersampled scale, so display-space smoothing is tol/2.
+  { label: 'Smoothest', tol: 6.5, pathomit: 52, despeckle: 3 },
+  { label: 'Smooth',    tol: 4,   pathomit: 32, despeckle: 2 },
+  { label: 'Balanced',  tol: 2.5, pathomit: 20, despeckle: 2 },
+  { label: 'Sharp',     tol: 1.2, pathomit: 10, despeckle: 1 },
+  { label: 'Sharpest',  tol: 0.6, pathomit: 4,  despeckle: 1 },
 ];
 
 async function runConvert() {
@@ -512,7 +871,7 @@ async function runConvert() {
   const w = Math.round(state.srcW * scale);
   const h = Math.round(state.srcH * scale);
 
-  if (mime === 'image/svg+xml') return traceToSVG(w, h);
+  if (mime === 'image/svg+xml') return traceToSVG();
 
   setProgress(40, 'Rasterizing');
   const backdrop = NO_ALPHA.has(mime) ? state.cvBackdrop : null;
@@ -534,36 +893,58 @@ async function runConvert() {
   return { blob, w: canvas.width, h: canvas.height, ext: EXT[mime] };
 }
 
-async function traceToSVG(w, h) {
+/** Vectorize: supersample → quantize to a faithful palette → despeckle the
+    label map → flatten to exact flat colors → trace. The cleanup before
+    tracing is what turns bumpy pixel-stairs into long smooth curves. */
+async function traceToSVG() {
   const ImageTracer = await getTracer();
+  const d = DETAIL[parseInt(el.tcDetail.value, 10)];
+  const K = parseInt(el.tcColors.value, 10);
 
-  // Tracing cost scales hard with pixel count. Cap the input.
-  const MAX = 1600;
-  let tw = w, th = h;
-  if (Math.max(tw, th) > MAX) {
-    const k = MAX / Math.max(tw, th);
-    tw = Math.round(tw * k); th = Math.round(th * k);
+  // Work at 2× the source (capped) — the tracer smooths in supersampled
+  // units, which halves the visible wobble at display size.
+  const W = Math.min(2048, Math.max(state.srcW, state.srcH) * 2);
+  const k = W / Math.max(state.srcW, state.srcH);
+  const w = Math.round(state.srcW * k), h = Math.round(state.srcH * k);
+
+  setProgress(25, 'Building a faithful palette');
+  await nextFrame();
+  const keep = el.tcKeepTransparent.checked;
+  const canvas = rasterize(state.srcImg, w, h, keep ? null : '#FFFFFF');
+  const raw = canvas.getContext('2d').getImageData(0, 0, w, h);
+
+  const palette = ScribbleCore.quantize(raw.data, w, h, K);
+  const { labels } = ScribbleCore.labelize(raw.data, w, h, palette);
+
+  setProgress(45, 'Cleaning regions');
+  await nextFrame();
+  const clean = ScribbleCore.modeFilter(labels, w, h, d.despeckle);
+
+  const flat = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+    const L = clean[i];
+    if (L < 0) {
+      flat[p + 3] = 0;
+    } else {
+      flat[p] = palette[L][0];
+      flat[p + 1] = palette[L][1];
+      flat[p + 2] = palette[L][2];
+      flat[p + 3] = 255;
+    }
   }
 
-  setProgress(35, 'Rasterizing for trace');
-  const backdrop = el.tcKeepTransparent.checked ? null : '#FFFFFF';
-  const canvas = rasterize(state.srcImg, tw, th, backdrop);
-  const data = canvas.getContext('2d').getImageData(0, 0, tw, th);
+  setProgress(65, 'Tracing curves — this is the slow part');
+  await nextFrame();
 
-  setProgress(55, 'Tracing paths — this can take a moment');
-  await new Promise((r) => setTimeout(r, 30)); // let the progress bar paint
-
-  const d = DETAIL[parseInt(el.tcDetail.value, 10)];
-  const svg = ImageTracer.imagedataToSVG(data, {
-    numberofcolors: parseInt(el.tcColors.value, 10),
+  const svg = ImageTracer.imagedataToSVG({ width: w, height: h, data: flat }, {
+    numberofcolors: K + 2,
     colorsampling: 2,          // deterministic palette
-    colorquantcycles: 5,
-    ltres: d.ltres,
-    qtres: d.qtres,
+    colorquantcycles: 3,
+    ltres: d.tol,
+    qtres: d.tol,
     pathomit: d.pathomit,
-    blurradius: d.blurradius,
-    blurdelta: d.blurdelta,
-    rightangleenhance: d.rae,
+    blurradius: 0,             // we already cleaned upstream
+    rightangleenhance: false,  // pins corners; fights the smoothing
     linefilter: true,
     roundcoords: 2,
     strokewidth: 0,
@@ -573,10 +954,80 @@ async function traceToSVG(w, h) {
   });
 
   const blob = new Blob([svg], { type: 'image/svg+xml' });
-  return { blob, w: tw, h: th, ext: 'svg' };
+  return { blob, w, h, ext: 'svg' };
 }
 
-/* ---------- Tool 3: scribble ---------- */
+/* ---------- Tool 3: colorizer ---------- */
+
+async function runColorize() {
+  setProgress(25, 'Mixing paint');
+  await nextFrame();
+
+  const cap = 4096;
+  const k = Math.min(1, cap / Math.max(state.srcW, state.srcH));
+  const w = Math.round(state.srcW * k), h = Math.round(state.srcH * k);
+  const canvas = rasterize(state.srcImg, w, h, null);
+  const ctx = canvas.getContext('2d');
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+
+  const target = hexToRgb(el.czColor.value);
+  const [th, ts] = rgbToHsl(...target);
+  const strength = parseInt(el.czStrength.value, 10) / 100;
+  const paint = state.czMode === 'paint';
+  const replace = el.czReplace.checked;
+  const from = hexToRgb(el.czFrom.value);
+  // likeness 0..100 → how far from the picked color still counts
+  const tol = 0.05 + (parseInt(el.czLikeness.value, 10) / 100) * 0.6;
+
+  // Tiny LUT for the tint path: 256 luminance levels → RGB at target hue/sat.
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let l = 0; l < 256; l++) {
+    const [r, g, b] = hslToRgb(th, ts, l / 255);
+    lut[l * 3] = r; lut[l * 3 + 1] = g; lut[l * 3 + 2] = b;
+  }
+
+  const total = d.length;
+  const CHUNK = 4_000_000;
+  for (let start = 0; start < total; start += CHUNK) {
+    const end = Math.min(total, start + CHUNK);
+    for (let i = start; i < end; i += 4) {
+      if (d[i + 3] === 0) continue;
+      let wgt = 1;
+      if (replace) {
+        const dr = (d[i] - from[0]) / 255;
+        const dg = (d[i + 1] - from[1]) / 255;
+        const db = (d[i + 2] - from[2]) / 255;
+        const dist = Math.sqrt(dr * dr * 2 + dg * dg * 3 + db * db) / 2.449;
+        if (dist >= tol) continue;
+        wgt = dist <= tol * 0.65 ? 1 : 1 - (dist - tol * 0.65) / (tol * 0.35);
+      }
+      const f = strength * wgt;
+      let nr, ng, nb;
+      if (paint) {
+        nr = target[0]; ng = target[1]; nb = target[2];
+      } else {
+        // pinetools-style: keep the pixel's lightness, replace hue + sat
+        const mx = Math.max(d[i], d[i + 1], d[i + 2]);
+        const mn = Math.min(d[i], d[i + 1], d[i + 2]);
+        const l = (mx + mn) >> 1;
+        nr = lut[l * 3]; ng = lut[l * 3 + 1]; nb = lut[l * 3 + 2];
+      }
+      d[i] += (nr - d[i]) * f;
+      d[i + 1] += (ng - d[i + 1]) * f;
+      d[i + 2] += (nb - d[i + 2]) * f;
+    }
+    setProgress(25 + (end / total) * 55, 'Colorizing');
+    await nextFrame();
+  }
+
+  ctx.putImageData(id, 0, 0);
+  setProgress(88, 'Encoding');
+  const blob = await canvasToBlob(canvas, 'image/png');
+  return { blob, w, h, ext: 'png' };
+}
+
+/* ---------- Tool 4: scribble ---------- */
 
 let animToken = 0;
 
@@ -587,8 +1038,10 @@ async function runScribble() {
   let compute = 0;
   let t = performance.now();
 
-  // Analyze at a small size — the walker only needs region shapes.
-  const A = 220;
+  const detail = parseInt(el.scDetail.value, 10);
+
+  // Analysis size follows detail — a finer grid resolves smaller features.
+  const A = 150 + detail * 18;
   const ka = Math.min(1, A / Math.max(state.srcW, state.srcH));
   const aw = Math.max(2, Math.round(state.srcW * ka));
   const ah = Math.max(2, Math.round(state.srcH * ka));
@@ -608,6 +1061,7 @@ async function runScribble() {
   const { strokes } = ScribbleCore.plan(data, aw, ah, ow, oh, {
     colors: parseInt(el.scColors.value, 10),
     weight: parseInt(el.scWeight.value, 10),
+    detail,
   });
   if (!strokes.length) throw new Error('Nothing to scribble — the image looks fully transparent.');
 
@@ -624,7 +1078,7 @@ async function runScribble() {
       ScribbleCore.drawStroke(mctx, strokes[i]);
       if (i % 400 === 399) {
         setProgress(30 + (i / strokes.length) * 60, `Scribbling · ${i + 1} of ${strokes.length} strokes`);
-        await new Promise((r) => requestAnimationFrame(r));
+        await nextFrame();
       }
     }
     setProgress(95, 'Encoding');
@@ -735,6 +1189,7 @@ function showResult(tab) {
     el.downloadBtn.disabled = true;
     el.timelapseBtn.hidden = true;
   }
+  el.tuField.hidden = !(tab === 'bg' && r?.editCanvas);
 }
 
 async function run() {
@@ -742,6 +1197,7 @@ async function run() {
   const tab = state.tab;
   state.busy = true;
   clearError();
+  setTool(null);
   el.runBtn.disabled = true;
   el.downloadBtn.disabled = true;
   el.timelapseBtn.hidden = true;
@@ -752,6 +1208,7 @@ async function run() {
     let out;
     if (tab === 'bg') out = await runBackgroundRemoval();
     else if (tab === 'convert') out = await runConvert();
+    else if (tab === 'colorize') out = await runColorize();
     else out = await runScribble();
 
     const ms = out.msOverride ?? Math.round(performance.now() - t0);
@@ -764,7 +1221,11 @@ async function run() {
     const timelapse = out.timelapse
       ? { ...out.timelapse, url: URL.createObjectURL(out.timelapse.blob) }
       : null;
-    state.results[tab] = { blob: out.blob, w: out.w, h: out.h, ext: out.ext, url, ms, timelapse };
+    state.results[tab] = {
+      blob: out.blob, w: out.w, h: out.h, ext: out.ext, url, ms, timelapse,
+      editCanvas: out.editCanvas || null,
+    };
+    if (tab === 'bg') state.edit = null;   // new cutout = fresh touch-up session
 
     if (prev) {
       setTimeout(() => {
@@ -787,7 +1248,8 @@ async function run() {
   }
 }
 
-function download() {
+async function download() {
+  if (state.edit?.dirty) await finalizeEdit();
   const r = state.results[state.tab];
   if (!r) return;
   const a = document.createElement('a');
@@ -853,10 +1315,11 @@ document.querySelectorAll('.tab').forEach((btn) => {
       b.setAttribute('aria-selected', String(on));
     });
     cancelScribbleAnim();
+    setTool(null);
     state.tab = btn.dataset.tab;
-    el.panelBg.hidden = state.tab !== 'bg';
-    el.panelConvert.hidden = state.tab !== 'convert';
-    el.panelScribble.hidden = state.tab !== 'scribble';
+    for (const [tab, key] of Object.entries(PANELS)) {
+      el[key].hidden = state.tab !== tab;
+    }
     el.runBtn.textContent = RUN_LABEL[state.tab];
     clearError();
     hideProgress();
@@ -917,7 +1380,7 @@ const HINTS = {
   'image/webp':    'Smaller than PNG at similar quality, and it keeps alpha.',
   'image/avif':    'Smallest files, keeps alpha. Chrome and Edge can write it; Safari and Firefox cannot.',
   'image/bmp':     'Uncompressed 24-bit. Large files, no alpha. Only for tools that demand it.',
-  'image/svg+xml': 'Traces the image into real vector paths. Built for flat art, not photographs.',
+  'image/svg+xml': 'Rebuilds the image as clean vector shapes — flat colors, smooth curves. Made for logos and flat art, not photographs.',
 };
 
 function updateConvertUI() {
@@ -946,15 +1409,45 @@ el.tcDetail.addEventListener('input', () => {
   el.tcDetailVal.textContent = DETAIL[parseInt(el.tcDetail.value, 10)].label;
 });
 
+/* --- colorize panel --- */
+document.querySelectorAll('[data-czmode]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-czmode]').forEach((b) => b.classList.toggle('is-active', b === btn));
+    state.czMode = btn.dataset.czmode;
+  });
+});
+el.czStrength.addEventListener('input', () => {
+  el.czStrengthVal.textContent = el.czStrength.value + '%';
+});
+el.czLikeness.addEventListener('input', () => {
+  el.czLikenessVal.textContent = el.czLikeness.value + '%';
+});
+el.czReplace.addEventListener('change', () => {
+  el.czReplaceOpts.hidden = !el.czReplace.checked;
+  if (!el.czReplace.checked && state.pickMode) {
+    state.pickMode = false;
+    el.czPick.classList.remove('is-on');
+    document.body.classList.remove('is-picking');
+  }
+});
+
 /* --- scribble panel --- */
 const WEIGHT_LABELS = [
   'Ballpoint', 'Fine pen', 'Pencil', 'Fine marker', 'Marker',
   'Chunky marker', 'Crayon', 'Chunky crayon', 'Fat crayon', 'Fistful of crayon',
 ];
+const DETAIL_LABELS = [
+  'Barely there', 'Sparse', 'Loose', 'Sketchy', 'Casual',
+  'Solid', 'Attentive', 'Thorough', 'Obsessive', 'Every last bit',
+];
 function updateWeightLabel() {
   el.scWeightVal.textContent = WEIGHT_LABELS[parseInt(el.scWeight.value, 10) - 1];
 }
+function updateDetailLabel() {
+  el.scDetailVal.textContent = DETAIL_LABELS[parseInt(el.scDetail.value, 10) - 1];
+}
 el.scWeight.addEventListener('input', updateWeightLabel);
+el.scDetail.addEventListener('input', updateDetailLabel);
 el.scColors.addEventListener('input', () => { el.scColorsVal.textContent = el.scColors.value; });
 
 /* --- actions --- */
@@ -966,6 +1459,7 @@ el.timelapseBtn.addEventListener('click', downloadTimelapse);
 (async function boot() {
   updateConvertUI();
   updateWeightLabel();
+  updateDetailLabel();
   applySplit();
   applyZoom();
   let avif = false;

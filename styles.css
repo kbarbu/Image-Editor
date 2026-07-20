@@ -640,3 +640,117 @@ input[type="range"] { width: 100%; accent-color: var(--ruby); cursor: pointer; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============ round 2: colorize, touch-up, brush cursor ============ */
+
+.seg--full { display: flex; width: 100%; }
+.seg--full .seg__btn { flex: 1; }
+
+.field--rule {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  margin-top: 4px;
+}
+
+.colorrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.colorwell {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 52px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+.colorwell::-webkit-color-swatch-wrapper { padding: 3px; }
+.colorwell::-webkit-color-swatch { border: none; border-radius: 4px; }
+.colorwell::-moz-color-swatch { border: none; border-radius: 4px; }
+
+.ghost-btn--sm {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+.ghost-btn.is-on,
+#czPick.is-on {
+  border-color: var(--ruby);
+  color: var(--ruby);
+  box-shadow: 0 0 0 1px var(--ruby) inset;
+}
+
+body.is-picking .stage,
+body.is-picking .pane { cursor: crosshair; }
+
+/* --- touch-up tools --- */
+.toolrow {
+  display: flex;
+  gap: 10px;
+}
+
+.tool-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.tool-btn:hover { border-color: var(--muted); }
+
+.tool-btn__ico {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1.5px solid currentColor;
+  display: inline-block;
+}
+.tool-btn--erase .tool-btn__ico {
+  background:
+    linear-gradient(45deg, transparent 44%, currentColor 44%, currentColor 56%, transparent 56%);
+}
+.tool-btn--restore .tool-btn__ico {
+  background:
+    linear-gradient(0deg, transparent 42%, currentColor 42%, currentColor 58%, transparent 58%),
+    linear-gradient(90deg, transparent 42%, currentColor 42%, currentColor 58%, transparent 58%);
+}
+
+.tool-btn.is-on {
+  border-color: var(--ruby);
+  color: var(--ruby);
+  background: color-mix(in srgb, var(--ruby) 8%, var(--bg));
+  box-shadow: 0 0 0 1px var(--ruby) inset;
+}
+.tool-btn--restore.is-on {
+  border-color: #1E9E63;
+  color: #1E9E63;
+  background: color-mix(in srgb, #1E9E63 8%, var(--bg));
+  box-shadow: 0 0 0 1px #1E9E63 inset;
+}
+
+/* the circular brush ghost that follows the pointer */
+.brushcursor {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  border: 1.5px solid var(--ruby);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.65) inset;
+  mix-blend-mode: normal;
+}
+.brushcursor.is-restore { border-color: #1E9E63; }
